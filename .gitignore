@@ -1,69 +1,27 @@
-# Prerequisites
-*.d
+# Exclude everything
+/*
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# Except for default project files
+!/.github
+!/build-aux
+!/cmake
+!/data
+!/src
+!.clang-format
+!.gersemirc
+!.gitignore
+!buildspec.json
+!CMakeLists.txt
+!CMakePresets.json
+!LICENSE
+!README.md
+!PLAN.md
 
-# Precompiled Headers
-*.gch
-*.pch
+# Exclude lock files
+*.lock.json
 
-# Linker files
-*.ilk
+# Exclude macOS legacy resource forks
+.DS_Store
 
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
-build/
-Build/
-build-*/
-
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
-
-# Temporary files
-*.tmp
-*.log
-*.bak
-*.swp
-
-# vcpkg
-vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+# Exclude CMake build number cache
+/cmake/.CMakeBuildNumber
