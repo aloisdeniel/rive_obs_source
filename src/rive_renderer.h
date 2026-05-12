@@ -58,8 +58,15 @@ void rive_renderer_render(rive_renderer_t *r, const char *fit_value,
 gs_texture_t *rive_renderer_get_texture(rive_renderer_t *r);
 
 // Fires the named trigger input on the active state machine. Returns true if
-// an input with that name was found. Reserved for M5 (event mapping).
+// an input with that name was found. Returns false if no input matches OR if
+// no state machine is loaded — callers that distinguish "missing input" from
+// "no SM" should check rive_renderer_has_state_machine() first.
 bool rive_renderer_fire_trigger(rive_renderer_t *r, const char *trigger_name);
+
+// True if a state machine instance is currently loaded and ready to receive
+// trigger inputs. Used by the source layer to suppress "unknown trigger"
+// warnings while the file is still loading or unset.
+bool rive_renderer_has_state_machine(rive_renderer_t *r);
 
 #ifdef __cplusplus
 }
