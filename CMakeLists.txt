@@ -45,6 +45,20 @@ target_sources(
     deps/rive-runtime/utils/no_op_factory.cpp
 )
 
+if(APPLE)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_mac.mm)
+  set_source_files_properties(
+    src/rive_renderer_mac.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-fno-rtti"
+  )
+elseif(WIN32)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_win.cpp)
+  set_source_files_properties(
+    src/rive_renderer_win.cpp
+    PROPERTIES COMPILE_OPTIONS "/GR-"
+  )
+endif()
+
 # rive-runtime is vendored under our strict warning set and compiled without
 # RTTI; match those flags for the files we pull in from that tree so the
 # typeinfo for rive's render base classes (which we don't define here) isn't

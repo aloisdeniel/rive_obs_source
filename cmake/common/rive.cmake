@@ -192,7 +192,8 @@ target_link_libraries(
 
 if(APPLE)
   # Metal backend pulls in these Apple frameworks. CoreText is used by rive's
-  # harfbuzz font backend on Apple platforms.
+  # harfbuzz font backend on Apple platforms; ImageIO is used by rive_decoders
+  # for PNG/JPEG decode via CGImageSource.
   target_link_libraries(
     rive::runtime
     INTERFACE
@@ -203,6 +204,7 @@ if(APPLE)
       "-framework CoreGraphics"
       "-framework CoreText"
       "-framework CoreFoundation"
+      "-framework ImageIO"
   )
 elseif(WIN32)
   target_link_libraries(
