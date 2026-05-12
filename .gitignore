@@ -5,6 +5,7 @@
 !/.github
 !/.gitmodules
 !/build-aux
+!/examples
 !/cmake
 !/data
 !/deps
