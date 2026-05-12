@@ -251,7 +251,12 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 	if (!ctx->renderer) {
 		char err[256];
 		err[0] = '\0';
+		// gs_texture_create_from_iosurface (called inside renderer create)
+		// requires the GS context to be active. video_tick runs on the
+		// graphics thread but without it entered.
+		obs_enter_graphics();
 		ctx->renderer = rive_renderer_create(ctx->width, ctx->height, err, sizeof(err));
+		obs_leave_graphics();
 		if (!ctx->renderer) {
 			obs_log(LOG_ERROR, "rive: renderer create failed: %s",
 				err[0] ? err : "unknown");
@@ -259,7 +264,9 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 			return;
 		}
 	} else {
+		obs_enter_graphics();
 		rive_renderer_resize(ctx->renderer, ctx->width, ctx->height);
+		obs_leave_graphics();
 	}
 
 	// Empty path is the "unloaded" state, not an error. Clear status and
@@ -704,7 +711,15 @@ static void rive_source_render(void *data, gs_effect_t *effect)
 			obs_log(LOG_WARNING, "rive: keyed mutex acquire timed out");
 		} else {
 #endif
+			// On macOS, gs_texture_create_from_iosurface produces a
+			// GL_TEXTURE_RECTANGLE — sampling it with the standard 2D
+			// effect collapses every fragment to texel (0,0) and yields
+			// solid clear-color. Use the rect-sampler effect there.
+#ifdef __APPLE__
+			gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT_RECT);
+#else
 			gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+#endif
 			gs_eparam_t *image = gs_effect_get_param_by_name(def, "image");
 			gs_effect_set_texture(image, tex);
 			while (gs_effect_loop(def, "Draw")) {
