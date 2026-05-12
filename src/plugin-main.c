@@ -8,10 +8,13 @@
 #include <graphics/vec4.h>
 #include <plugin-support.h>
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "obs_events.h"
 #include "rive_file.h"
@@ -38,6 +41,13 @@ extern void *rive_obs_link_probe(void);
 #define SK_FIT "fit"
 #define SK_ALIGNMENT "alignment"
 #define SK_BG_COLOR "bg_color"
+#define SK_HOT_RELOAD "hot_reload"
+#define SK_STATUS "status"
+#define SK_REFRESH "refresh"
+
+// How often the hot-reload watcher stats the file. Cheap, but pointless to do
+// on every video_tick — the user is unlikely to overwrite the file >1x/sec.
+#define HOT_RELOAD_POLL_SECONDS 1.0f
 
 // Fit / alignment values are persisted as strings so future renderer code can
 // map them to rive::Fit / rive::Alignment without an int-vs-enum coupling.
@@ -68,6 +78,7 @@ struct rive_source {
 	char *fit;
 	char *alignment;
 	uint32_t bg_color; // RGBA, premultiplied later in render
+	bool hot_reload;   // poll the .riv on disk and reload on mtime change
 
 	// GPU renderer (created lazily on the graphics thread). Owned.
 	rive_renderer_t *renderer;
@@ -85,6 +96,22 @@ struct rive_source {
 	char *synced_path;
 	char *synced_artboard;
 	char *synced_state_machine;
+
+	// Hot-reload watcher state. Only touched on the graphics thread.
+	int64_t file_mtime; // mtime in seconds of the currently loaded file
+	float watch_accum;  // seconds accumulated since the last stat()
+
+	// Status surface. Written by the graphics thread (on load success /
+	// failure), read by the UI thread (when populating the properties
+	// panel). The mutex is held only for short snapshots.
+	pthread_mutex_t status_mu;
+	char *last_error;     // owned (bstrdup) error string, or NULL
+	bool last_load_ok;    // true if the most recent load succeeded
+	bool ever_loaded;     // true once a file has been successfully loaded
+	// Most recently logged error string. Used to suppress repeated
+	// identical errors so we don't spam the OBS log when the watcher
+	// keeps reading a malformed file.
+	char *logged_error;
 };
 
 static const char *rive_source_get_name(void *type_data)
@@ -120,11 +147,77 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	ctx->width = (w > 0) ? (uint32_t)w : RIVE_SOURCE_DEFAULT_WIDTH;
 	ctx->height = (h > 0) ? (uint32_t)h : RIVE_SOURCE_DEFAULT_HEIGHT;
 	ctx->bg_color = (uint32_t)obs_data_get_int(settings, SK_BG_COLOR);
+	ctx->hot_reload = obs_data_get_bool(settings, SK_HOT_RELOAD);
 
 	// Tell the graphics-thread tick to push these into the renderer on its
 	// next pass. We deliberately do not touch ctx->renderer from here — the
 	// update callback can fire from non-graphics threads.
 	ctx->dirty = true;
+	// Force the mtime watcher to re-stat next tick so a freshly chosen file
+	// (or one whose path field was edited by hand) updates its baseline.
+	ctx->file_mtime = 0;
+	ctx->watch_accum = HOT_RELOAD_POLL_SECONDS;
+}
+
+// ---- status surface --------------------------------------------------------
+
+// Replaces ctx->last_error under the status mutex and sets the load flag. err
+// may be NULL to clear the error; pass ok=true only when there is no error.
+static void rive_source_set_status(struct rive_source *ctx, bool ok, const char *err)
+{
+	pthread_mutex_lock(&ctx->status_mu);
+	ctx->last_load_ok = ok;
+	if (ok) {
+		ctx->ever_loaded = true;
+		bfree(ctx->last_error);
+		ctx->last_error = NULL;
+	} else if (err && *err) {
+		bfree(ctx->last_error);
+		ctx->last_error = bstrdup(err);
+	}
+	pthread_mutex_unlock(&ctx->status_mu);
+}
+
+// Returns a malloc'd copy of the current status string for display in the
+// properties panel. Caller must bfree(). path / artboard / sm are passed in to
+// avoid taking the source lock in here.
+static char *rive_source_format_status(struct rive_source *ctx)
+{
+	char err_copy[512] = {0};
+	bool ok;
+	bool ever;
+	pthread_mutex_lock(&ctx->status_mu);
+	ok = ctx->last_load_ok;
+	ever = ctx->ever_loaded;
+	if (ctx->last_error)
+		snprintf(err_copy, sizeof(err_copy), "%s", ctx->last_error);
+	pthread_mutex_unlock(&ctx->status_mu);
+
+	char buf[2048];
+	int n = 0;
+	if (!ctx->path || !*ctx->path) {
+		snprintf(buf, sizeof(buf), "No file selected.");
+		return bstrdup(buf);
+	}
+	if (!ok && err_copy[0]) {
+		n = snprintf(buf, sizeof(buf), "Error: %s\nFile: %s", err_copy, ctx->path);
+	} else if (ok) {
+		n = snprintf(buf, sizeof(buf), "Loaded: %s", ctx->path);
+		if (ctx->artboard && *ctx->artboard)
+			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nArtboard: %s",
+				      ctx->artboard);
+		if (ctx->state_machine && *ctx->state_machine)
+			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nState machine: %s",
+				      ctx->state_machine);
+	} else if (ever) {
+		n = snprintf(buf, sizeof(buf), "Pending reload: %s", ctx->path);
+	} else {
+		n = snprintf(buf, sizeof(buf), "Loading: %s", ctx->path);
+	}
+	if (ctx->hot_reload)
+		n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\n[Hot reload: enabled]");
+	(void)n;
+	return bstrdup(buf);
 }
 
 static bool str_equal_or_null(const char *a, const char *b)
@@ -132,6 +225,19 @@ static bool str_equal_or_null(const char *a, const char *b)
 	const char *aa = a ? a : "";
 	const char *bb = b ? b : "";
 	return strcmp(aa, bb) == 0;
+}
+
+// Logs an error if (and only if) the message differs from the last one we
+// logged. Stops the OBS log from filling up when the hot-reload watcher keeps
+// retrying a broken file.
+static void rive_source_log_error_once(struct rive_source *ctx, const char *fmt, const char *msg)
+{
+	const char *m = msg && *msg ? msg : "unknown";
+	if (ctx->logged_error && strcmp(ctx->logged_error, m) == 0)
+		return;
+	bfree(ctx->logged_error);
+	ctx->logged_error = bstrdup(m);
+	obs_log(LOG_WARNING, fmt, m);
 }
 
 // Pushes the source's cached settings into the renderer. Must run on the OBS
@@ -149,22 +255,43 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 		if (!ctx->renderer) {
 			obs_log(LOG_ERROR, "rive: renderer create failed: %s",
 				err[0] ? err : "unknown");
+			rive_source_set_status(ctx, false, err[0] ? err : "renderer create failed");
 			return;
 		}
 	} else {
 		rive_renderer_resize(ctx->renderer, ctx->width, ctx->height);
 	}
 
+	// Empty path is the "unloaded" state, not an error. Clear status and
+	// short-circuit before touching the renderer.
+	if (!ctx->path || !*ctx->path) {
+		rive_renderer_set_file(ctx->renderer, "", "", "", NULL, 0);
+		rive_source_set_status(ctx, true, NULL);
+		bfree(ctx->logged_error);
+		ctx->logged_error = NULL;
+		ctx->file_mtime = 0;
+		return;
+	}
+
 	char err[256];
 	err[0] = '\0';
-	const bool ok = rive_renderer_set_file(ctx->renderer, ctx->path ? ctx->path : "",
-					       ctx->artboard ? ctx->artboard : "",
+	const bool ok = rive_renderer_set_file(ctx->renderer, ctx->path, ctx->artboard ? ctx->artboard : "",
 					       ctx->state_machine ? ctx->state_machine : "", err,
 					       sizeof(err));
 	if (!ok) {
-		obs_log(LOG_WARNING, "rive: set_file failed: %s", err[0] ? err : "unknown");
+		rive_source_log_error_once(ctx, "rive: set_file failed: %s", err);
+		rive_source_set_status(ctx, false, err[0] ? err : "set_file failed");
 		return;
 	}
+
+	// Successful load. Record the mtime so the watcher has a baseline and
+	// clear the dedup memo so future failures get logged again.
+	struct stat sb;
+	if (stat(ctx->path, &sb) == 0)
+		ctx->file_mtime = (int64_t)sb.st_mtime;
+	bfree(ctx->logged_error);
+	ctx->logged_error = NULL;
+	rive_source_set_status(ctx, true, NULL);
 
 	// If the SM identity actually changed (not just bg color or fit),
 	// drop memoized "unknown trigger" warnings so a name that's now valid
@@ -181,12 +308,46 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 	}
 }
 
+// Polls the .riv file's mtime. If it changed since the last successful load,
+// mark the source dirty so rive_source_sync_renderer reloads it next tick.
+// Cheap (one stat()) and rate-limited to HOT_RELOAD_POLL_SECONDS.
+static void rive_source_poll_hot_reload(struct rive_source *ctx, float dt)
+{
+	if (!ctx->hot_reload || !ctx->path || !*ctx->path)
+		return;
+	ctx->watch_accum += dt;
+	if (ctx->watch_accum < HOT_RELOAD_POLL_SECONDS)
+		return;
+	ctx->watch_accum = 0.f;
+
+	struct stat sb;
+	if (stat(ctx->path, &sb) != 0)
+		return;
+	const int64_t mtime = (int64_t)sb.st_mtime;
+	if (ctx->file_mtime == 0) {
+		ctx->file_mtime = mtime;
+		return;
+	}
+	if (mtime != ctx->file_mtime) {
+		obs_log(LOG_INFO, "rive: file changed on disk, reloading: %s", ctx->path);
+		ctx->file_mtime = mtime;
+		// Force the renderer to drop its cached load and reread. The
+		// renderer short-circuits when (path, artboard, sm) is
+		// unchanged, so we briefly clear its synced selection by
+		// pushing an empty path before the next sync.
+		if (ctx->renderer)
+			rive_renderer_set_file(ctx->renderer, "", "", "", NULL, 0);
+		ctx->dirty = true;
+	}
+}
+
 // ---- lifecycle -------------------------------------------------------------
 
 static void *rive_source_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct rive_source *ctx = bzalloc(sizeof(struct rive_source));
 	ctx->source = source;
+	pthread_mutex_init(&ctx->status_mu, NULL);
 
 	// Subscribe to obs-frontend events here (per-source, not in
 	// obs_module_load) so the callback never fires before the source
@@ -224,6 +385,9 @@ static void rive_source_destroy(void *data)
 	bfree(ctx->synced_path);
 	bfree(ctx->synced_artboard);
 	bfree(ctx->synced_state_machine);
+	bfree(ctx->last_error);
+	bfree(ctx->logged_error);
+	pthread_mutex_destroy(&ctx->status_mu);
 	obs_log(LOG_INFO, "Rive source destroyed");
 	bfree(ctx);
 }
@@ -247,6 +411,7 @@ static void rive_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, SK_FIT, "contain");
 	obs_data_set_default_string(settings, SK_ALIGNMENT, "center");
 	obs_data_set_default_int(settings, SK_BG_COLOR, 0x00000000);
+	obs_data_set_default_bool(settings, SK_HOT_RELOAD, false);
 
 	// Event-mapping fields default to empty (= unmapped, event ignored).
 	const size_t n = rive_events_count();
@@ -384,11 +549,32 @@ static bool on_artboard_modified(obs_properties_t *props, obs_property_t *proper
 	return true;
 }
 
+// Refresh button callback. Returning true forces the properties UI to be
+// rebuilt — that's how we get the status info field to re-render with the
+// most recent error / load state.
+static bool on_refresh_clicked(obs_properties_t *props, obs_property_t *property, void *data)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(property);
+	UNUSED_PARAMETER(data);
+	return true;
+}
+
 static obs_properties_t *rive_source_get_properties(void *data)
 {
 	struct rive_source *ctx = data;
 
 	obs_properties_t *props = obs_properties_create();
+
+	// Status (read-only, computed from current source state). Placed at
+	// the top so users see load errors before scrolling.
+	if (ctx) {
+		char *status = rive_source_format_status(ctx);
+		obs_properties_add_text(props, SK_STATUS, status ? status : "", OBS_TEXT_INFO);
+		bfree(status);
+		obs_properties_add_button(props, SK_REFRESH, obs_module_text("Refresh"),
+					  on_refresh_clicked);
+	}
 
 	obs_property_t *p_file =
 		obs_properties_add_path(props, SK_FILE, obs_module_text("File"), OBS_PATH_FILE,
@@ -420,6 +606,8 @@ static obs_properties_t *rive_source_get_properties(void *data)
 		obs_property_list_add_string(p_align, ALIGN_LABELS[i], ALIGN_VALUES[i]);
 
 	obs_properties_add_color_alpha(props, SK_BG_COLOR, obs_module_text("BackgroundColor"));
+
+	obs_properties_add_bool(props, SK_HOT_RELOAD, obs_module_text("HotReload"));
 
 	// Event mapping table. Events are emitted by the events module in a
 	// stable order grouped by category; we walk that order, opening a new
@@ -484,6 +672,7 @@ static void rive_source_video_tick(void *data, float seconds)
 	if (!ctx)
 		return;
 
+	rive_source_poll_hot_reload(ctx, seconds);
 	rive_source_sync_renderer(ctx);
 
 	// Fire any frontend-event-mapped triggers *before* advance so the SM
