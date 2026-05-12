@@ -8,11 +8,13 @@
 #include <graphics/vec4.h>
 #include <plugin-support.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "rive_file.h"
+#include "rive_renderer.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
@@ -65,6 +67,12 @@ struct rive_source {
 	char *fit;
 	char *alignment;
 	uint32_t bg_color; // RGBA, premultiplied later in render
+
+	// GPU renderer (created lazily on the graphics thread). Owned.
+	rive_renderer_t *renderer;
+	// True when settings have changed and the renderer needs to refresh its
+	// file / size on the next graphics-thread tick.
+	bool dirty;
 };
 
 static const char *rive_source_get_name(void *type_data)
@@ -100,6 +108,42 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	ctx->width = (w > 0) ? (uint32_t)w : RIVE_SOURCE_DEFAULT_WIDTH;
 	ctx->height = (h > 0) ? (uint32_t)h : RIVE_SOURCE_DEFAULT_HEIGHT;
 	ctx->bg_color = (uint32_t)obs_data_get_int(settings, SK_BG_COLOR);
+
+	// Tell the graphics-thread tick to push these into the renderer on its
+	// next pass. We deliberately do not touch ctx->renderer from here — the
+	// update callback can fire from non-graphics threads.
+	ctx->dirty = true;
+}
+
+// Pushes the source's cached settings into the renderer. Must run on the OBS
+// graphics thread (it touches GPU resources).
+static void rive_source_sync_renderer(struct rive_source *ctx)
+{
+	if (!ctx->dirty)
+		return;
+	ctx->dirty = false;
+
+	if (!ctx->renderer) {
+		char err[256];
+		err[0] = '\0';
+		ctx->renderer = rive_renderer_create(ctx->width, ctx->height, err, sizeof(err));
+		if (!ctx->renderer) {
+			obs_log(LOG_ERROR, "rive: renderer create failed: %s",
+				err[0] ? err : "unknown");
+			return;
+		}
+	} else {
+		rive_renderer_resize(ctx->renderer, ctx->width, ctx->height);
+	}
+
+	char err[256];
+	err[0] = '\0';
+	if (!rive_renderer_set_file(ctx->renderer, ctx->path ? ctx->path : "",
+				    ctx->artboard ? ctx->artboard : "",
+				    ctx->state_machine ? ctx->state_machine : "", err,
+				    sizeof(err))) {
+		obs_log(LOG_WARNING, "rive: set_file failed: %s", err[0] ? err : "unknown");
+	}
 }
 
 // ---- lifecycle -------------------------------------------------------------
@@ -118,6 +162,12 @@ static void rive_source_destroy(void *data)
 	struct rive_source *ctx = data;
 	if (!ctx)
 		return;
+	if (ctx->renderer) {
+		obs_enter_graphics();
+		rive_renderer_destroy(ctx->renderer);
+		obs_leave_graphics();
+		ctx->renderer = NULL;
+	}
 	bfree(ctx->path);
 	bfree(ctx->artboard);
 	bfree(ctx->state_machine);
@@ -326,6 +376,20 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 // ---- render ----------------------------------------------------------------
 
+static void rive_source_video_tick(void *data, float seconds)
+{
+	struct rive_source *ctx = data;
+	if (!ctx)
+		return;
+
+	rive_source_sync_renderer(ctx);
+
+	if (ctx->renderer) {
+		rive_renderer_advance(ctx->renderer, seconds);
+		rive_renderer_render(ctx->renderer, ctx->fit, ctx->alignment, ctx->bg_color);
+	}
+}
+
 static void rive_source_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
@@ -333,8 +397,32 @@ static void rive_source_render(void *data, gs_effect_t *effect)
 	if (!ctx)
 		return;
 
-	// Until the renderer lands (M4) just paint the background colour so
-	// users can confirm the size + bg-color settings are taking effect.
+	gs_texture_t *tex = ctx->renderer ? rive_renderer_get_texture(ctx->renderer) : NULL;
+
+	if (tex) {
+#ifdef _WIN32
+		// On Windows the renderer's texture is a shared NT-handle protected
+		// by a keyed mutex (same-key protocol). Acquire it before sampling
+		// so writes from the renderer's D3D11 device are visible here.
+		if (gs_texture_acquire_sync(tex, 0, 1000) != 0) {
+			obs_log(LOG_WARNING, "rive: keyed mutex acquire timed out");
+		} else {
+#endif
+			gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+			gs_eparam_t *image = gs_effect_get_param_by_name(def, "image");
+			gs_effect_set_texture(image, tex);
+			while (gs_effect_loop(def, "Draw")) {
+				gs_draw_sprite(tex, 0, ctx->width, ctx->height);
+			}
+#ifdef _WIN32
+			gs_texture_release_sync(tex, 0);
+		}
+#endif
+		return;
+	}
+
+	// Renderer not ready yet — paint the configured background so the
+	// source still has a visible footprint at its declared size.
 	gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
 	gs_eparam_t *color_param = gs_effect_get_param_by_name(solid, "color");
 
@@ -365,6 +453,7 @@ static struct obs_source_info rive_source_info = {
 	.get_properties = rive_source_get_properties,
 	.get_width = rive_source_get_width,
 	.get_height = rive_source_get_height,
+	.video_tick = rive_source_video_tick,
 	.video_render = rive_source_render,
 };
 
