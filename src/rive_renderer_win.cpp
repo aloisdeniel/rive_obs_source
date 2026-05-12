@@ -500,4 +500,9 @@ bool rive_renderer_fire_trigger(rive_renderer_t *r, const char *trigger_name)
 	return true;
 }
 
+bool rive_renderer_has_state_machine(rive_renderer_t *r)
+{
+	return r && r->stateMachine != nullptr;
+}
+
 } // extern "C"

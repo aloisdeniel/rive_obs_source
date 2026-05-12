@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "obs_events.h"
 #include "rive_file.h"
 #include "rive_renderer.h"
 
@@ -73,6 +74,17 @@ struct rive_source {
 	// True when settings have changed and the renderer needs to refresh its
 	// file / size on the next graphics-thread tick.
 	bool dirty;
+
+	// OBS frontend event -> Rive trigger plumbing.
+	rive_events_t *events;
+
+	// Last (path, artboard, state_machine) triple successfully pushed into
+	// the renderer. Used to detect SM identity changes so we can reset the
+	// events module's one-shot warnings without spamming on unrelated
+	// settings updates (e.g. bg color).
+	char *synced_path;
+	char *synced_artboard;
+	char *synced_state_machine;
 };
 
 static const char *rive_source_get_name(void *type_data)
@@ -115,6 +127,13 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	ctx->dirty = true;
 }
 
+static bool str_equal_or_null(const char *a, const char *b)
+{
+	const char *aa = a ? a : "";
+	const char *bb = b ? b : "";
+	return strcmp(aa, bb) == 0;
+}
+
 // Pushes the source's cached settings into the renderer. Must run on the OBS
 // graphics thread (it touches GPU resources).
 static void rive_source_sync_renderer(struct rive_source *ctx)
@@ -138,11 +157,27 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 
 	char err[256];
 	err[0] = '\0';
-	if (!rive_renderer_set_file(ctx->renderer, ctx->path ? ctx->path : "",
-				    ctx->artboard ? ctx->artboard : "",
-				    ctx->state_machine ? ctx->state_machine : "", err,
-				    sizeof(err))) {
+	const bool ok = rive_renderer_set_file(ctx->renderer, ctx->path ? ctx->path : "",
+					       ctx->artboard ? ctx->artboard : "",
+					       ctx->state_machine ? ctx->state_machine : "", err,
+					       sizeof(err));
+	if (!ok) {
 		obs_log(LOG_WARNING, "rive: set_file failed: %s", err[0] ? err : "unknown");
+		return;
+	}
+
+	// If the SM identity actually changed (not just bg color or fit),
+	// drop memoized "unknown trigger" warnings so a name that's now valid
+	// stops warning and a name that's still invalid warns once for the
+	// new SM.
+	const bool sm_changed = !str_equal_or_null(ctx->synced_path, ctx->path) ||
+				!str_equal_or_null(ctx->synced_artboard, ctx->artboard) ||
+				!str_equal_or_null(ctx->synced_state_machine, ctx->state_machine);
+	if (sm_changed && ctx->events) {
+		rive_events_reset_warnings(ctx->events);
+		replace_str(&ctx->synced_path, ctx->path);
+		replace_str(&ctx->synced_artboard, ctx->artboard);
+		replace_str(&ctx->synced_state_machine, ctx->state_machine);
 	}
 }
 
@@ -152,7 +187,16 @@ static void *rive_source_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct rive_source *ctx = bzalloc(sizeof(struct rive_source));
 	ctx->source = source;
+
+	// Subscribe to obs-frontend events here (per-source, not in
+	// obs_module_load) so the callback never fires before the source
+	// exists.
+	ctx->events = rive_events_create();
+	rive_events_attach(ctx->events);
+
 	rive_source_apply_settings(ctx, settings);
+	rive_events_update_mapping(ctx->events, settings);
+
 	obs_log(LOG_INFO, "Rive source created (file='%s')", ctx->path ? ctx->path : "");
 	return ctx;
 }
@@ -162,6 +206,10 @@ static void rive_source_destroy(void *data)
 	struct rive_source *ctx = data;
 	if (!ctx)
 		return;
+	if (ctx->events) {
+		rive_events_destroy(ctx->events);
+		ctx->events = NULL;
+	}
 	if (ctx->renderer) {
 		obs_enter_graphics();
 		rive_renderer_destroy(ctx->renderer);
@@ -173,6 +221,9 @@ static void rive_source_destroy(void *data)
 	bfree(ctx->state_machine);
 	bfree(ctx->fit);
 	bfree(ctx->alignment);
+	bfree(ctx->synced_path);
+	bfree(ctx->synced_artboard);
+	bfree(ctx->synced_state_machine);
 	obs_log(LOG_INFO, "Rive source destroyed");
 	bfree(ctx);
 }
@@ -183,6 +234,7 @@ static void rive_source_update(void *data, obs_data_t *settings)
 	if (!ctx)
 		return;
 	rive_source_apply_settings(ctx, settings);
+	rive_events_update_mapping(ctx->events, settings);
 }
 
 static void rive_source_get_defaults(obs_data_t *settings)
@@ -195,6 +247,14 @@ static void rive_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, SK_FIT, "contain");
 	obs_data_set_default_string(settings, SK_ALIGNMENT, "center");
 	obs_data_set_default_int(settings, SK_BG_COLOR, 0x00000000);
+
+	// Event-mapping fields default to empty (= unmapped, event ignored).
+	const size_t n = rive_events_count();
+	for (size_t i = 0; i < n; ++i) {
+		const char *key = rive_events_setting_key(i);
+		if (key)
+			obs_data_set_default_string(settings, key, "");
+	}
 }
 
 static uint32_t rive_source_get_width(void *data)
@@ -361,6 +421,33 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 	obs_properties_add_color_alpha(props, SK_BG_COLOR, obs_module_text("BackgroundColor"));
 
+	// Event mapping table. Events are emitted by the events module in a
+	// stable order grouped by category; we walk that order, opening a new
+	// obs_properties_add_group whenever the group id changes. Each entry
+	// is a free-form text field naming a Rive trigger input.
+	const size_t evt_count = rive_events_count();
+	obs_properties_t *grp = NULL;
+	const char *cur_group_id = NULL;
+	for (size_t i = 0; i < evt_count; ++i) {
+		const char *gid = rive_events_group(i);
+		if (!cur_group_id || strcmp(cur_group_id, gid) != 0) {
+			if (grp) {
+				obs_properties_add_group(props, cur_group_id,
+							 rive_events_group_label(i - 1),
+							 OBS_GROUP_NORMAL, grp);
+			}
+			grp = obs_properties_create();
+			cur_group_id = gid;
+		}
+		obs_properties_add_text(grp, rive_events_setting_key(i), rive_events_label(i),
+					OBS_TEXT_DEFAULT);
+	}
+	if (grp) {
+		obs_properties_add_group(props, cur_group_id,
+					 rive_events_group_label(evt_count - 1),
+					 OBS_GROUP_NORMAL, grp);
+	}
+
 	// Pre-populate the dropdowns based on the source's current settings so
 	// the panel shows real choices the first time it opens.
 	if (ctx && ctx->source) {
@@ -376,6 +463,21 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 // ---- render ----------------------------------------------------------------
 
+// Drain callback target. Runs on the graphics thread, where touching the
+// state machine is safe. Returning false signals "input not found on the
+// active SM" so the events module logs a one-shot warning; when the SM
+// itself isn't loaded yet we report true (silent drop) so transient
+// pre-load events don't spam warnings.
+static bool rive_source_fire_trigger(const char *name, void *user)
+{
+	struct rive_source *ctx = user;
+	if (!ctx || !ctx->renderer)
+		return true;
+	if (!rive_renderer_has_state_machine(ctx->renderer))
+		return true;
+	return rive_renderer_fire_trigger(ctx->renderer, name);
+}
+
 static void rive_source_video_tick(void *data, float seconds)
 {
 	struct rive_source *ctx = data;
@@ -383,6 +485,11 @@ static void rive_source_video_tick(void *data, float seconds)
 		return;
 
 	rive_source_sync_renderer(ctx);
+
+	// Fire any frontend-event-mapped triggers *before* advance so the SM
+	// can react to them this frame.
+	if (ctx->events)
+		rive_events_drain(ctx->events, rive_source_fire_trigger, ctx);
 
 	if (ctx->renderer) {
 		rive_renderer_advance(ctx->renderer, seconds);
