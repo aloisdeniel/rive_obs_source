@@ -14,6 +14,9 @@
  */
 
 #include "rive_renderer.h"
+#include "rive_scene_view_model.h"
+#include "rive_custom_data.h"
+#include "rive_image_cache.h"
 
 // Rive headers come first because <obs.h>'s graphics/math-defs.h defines
 // EPSILON as a macro that would otherwise clobber rive::math::EPSILON.
@@ -148,6 +151,19 @@ struct rive_renderer {
 	std::unique_ptr<rive::ArtboardInstance> artboard;
 	std::unique_ptr<rive::StateMachineInstance> stateMachine;
 
+	// SceneViewModel binding (null when the .riv has no such VM). See
+	// rive_renderer_mac.mm for the rationale; the windows backend treats it
+	// identically.
+	std::unique_ptr<rive_obs::SceneViewModelBinding> sceneViewModel;
+
+	// Custom-data binding (null when neither SceneViewModel nor an artboard
+	// default VM is present).
+	std::unique_ptr<rive_obs::CustomDataBinding> customData;
+
+	// URL → RenderImage cache shared with customData. Lives on the
+	// renderer because decoding needs the renderer's RenderContext.
+	std::unique_ptr<rive_obs::ImageCache> imageCache;
+
 	std::string loadedPath;
 	std::string loadedArtboard;
 	std::string loadedStateMachine;
@@ -249,9 +265,13 @@ bool allocate_target_resources(rive_renderer *r, char *err, size_t err_size)
 
 void clear_content(rive_renderer *r)
 {
+	// Custom-data first — it may share the SceneViewModel root.
+	r->customData.reset();
+	r->sceneViewModel.reset();
 	r->stateMachine.reset();
 	r->artboard.reset();
 	r->file.reset();
+	r->imageCache.reset();
 	r->loadedPath.clear();
 	r->loadedArtboard.clear();
 	r->loadedStateMachine.clear();
@@ -313,6 +333,23 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 	r->loadedPath = path;
 	r->loadedArtboard = artboard_name;
 	r->loadedStateMachine = sm_name;
+
+	r->sceneViewModel =
+		rive_obs::SceneViewModelBinding::tryCreate(r->file.get(), r->stateMachine.get());
+
+	rive::gpu::RenderContext *rc = r->renderContext.get();
+	r->imageCache = std::make_unique<rive_obs::ImageCache>(
+		[rc](const uint8_t *data, size_t size) -> rive::rcp<rive::RenderImage> {
+			if (!rc || !data || size == 0)
+				return nullptr;
+			return rc->decodeImage(rive::Span<const uint8_t>(data, size));
+		});
+
+	r->customData = rive_obs::CustomDataBinding::tryCreate(
+		r->file.get(), r->artboard.get(), r->stateMachine.get(),
+		r->sceneViewModel ? r->sceneViewModel->root() : nullptr,
+		r->imageCache.get());
+
 	return true;
 }
 
@@ -503,6 +540,23 @@ bool rive_renderer_fire_trigger(rive_renderer_t *r, const char *trigger_name)
 bool rive_renderer_has_state_machine(rive_renderer_t *r)
 {
 	return r && r->stateMachine != nullptr;
+}
+
+void rive_renderer_apply_scene_state(rive_renderer_t *r, const struct rive_scene_state *state)
+{
+	if (!r || !state || !r->sceneViewModel)
+		return;
+	r->sceneViewModel->apply(*state);
+}
+
+void rive_renderer_apply_custom_data(rive_renderer_t *r, struct obs_data *data)
+{
+	if (!r)
+		return;
+	if (r->imageCache)
+		r->imageCache->tick();
+	if (r->customData)
+		r->customData->apply(data);
 }
 
 } // extern "C"

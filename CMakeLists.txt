@@ -43,21 +43,53 @@ target_sources(
     src/rive_probe.cpp
     src/rive_file.cpp
     src/obs_events.cpp
+    src/obs_scene_state.c
+    src/rive_scene_view_model.cpp
+    src/rive_custom_data.cpp
+    src/rive_image_cache.cpp
     deps/rive-runtime/utils/no_op_factory.cpp
 )
 
+# rive-runtime is compiled without RTTI; the view-model modules reference
+# rive runtime types that don't carry typeinfo, so match that flag.
 if(APPLE)
-  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_mac.mm)
+  set_source_files_properties(
+    src/rive_scene_view_model.cpp
+    src/rive_custom_data.cpp
+    src/rive_image_cache.cpp
+    PROPERTIES COMPILE_OPTIONS "-fno-rtti"
+  )
+elseif(WIN32)
+  set_source_files_properties(
+    src/rive_scene_view_model.cpp
+    src/rive_custom_data.cpp
+    src/rive_image_cache.cpp
+    PROPERTIES COMPILE_OPTIONS "/GR-"
+  )
+endif()
+
+if(APPLE)
+  target_sources(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE src/rive_renderer_mac.mm src/rive_image_http_mac.mm
+  )
   set_source_files_properties(
     src/rive_renderer_mac.mm
+    src/rive_image_http_mac.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-fno-rtti"
   )
 elseif(WIN32)
-  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_win.cpp)
+  target_sources(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE src/rive_renderer_win.cpp src/rive_image_http_win.cpp
+  )
   set_source_files_properties(
     src/rive_renderer_win.cpp
+    src/rive_image_http_win.cpp
     PROPERTIES COMPILE_OPTIONS "/GR-"
   )
+  # WinHTTP for synchronous HTTP(S) GET in image_http_win.
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winhttp)
 endif()
 
 # rive-runtime is vendored under our strict warning set and compiled without

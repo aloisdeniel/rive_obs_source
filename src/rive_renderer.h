@@ -68,6 +68,19 @@ bool rive_renderer_fire_trigger(rive_renderer_t *r, const char *trigger_name);
 // warnings while the file is still loading or unset.
 bool rive_renderer_has_state_machine(rive_renderer_t *r);
 
+// Pushes one frame of OBS scene state into the SceneViewModel instance bound
+// to the loaded state machine. No-op when the file doesn't declare a
+// "SceneViewModel". See rive_scene_view_model.h for the property contract.
+struct rive_scene_state;
+void rive_renderer_apply_scene_state(rive_renderer_t *r, const struct rive_scene_state *state);
+
+// Pushes one snapshot of user-supplied data (parsed JSON) into the bound
+// view-model. No-op when no custom-data binding was created (file has no
+// SceneViewModel and no default artboard view model). See rive_custom_data.h
+// for the mapping contract. data may be null.
+struct obs_data;
+void rive_renderer_apply_custom_data(rive_renderer_t *r, struct obs_data *data);
+
 #ifdef __cplusplus
 }
 #endif
