@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 
 #include "obs_events.h"
+#include "obs_scene_state.h"
 #include "rive_file.h"
 #include "rive_renderer.h"
 
@@ -28,6 +29,8 @@ OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 extern void *rive_obs_link_probe(void);
 
 #define RIVE_SOURCE_ID "rive_source"
+// Fallback dimensions only used if OBS hasn't initialized video yet at the
+// moment defaults are queried; otherwise we match the active canvas size.
 #define RIVE_SOURCE_DEFAULT_WIDTH 640u
 #define RIVE_SOURCE_DEFAULT_HEIGHT 360u
 
@@ -44,6 +47,7 @@ extern void *rive_obs_link_probe(void);
 #define SK_HOT_RELOAD "hot_reload"
 #define SK_STATUS "status"
 #define SK_REFRESH "refresh"
+#define SK_DATA_FILE "data_file"
 
 // How often the hot-reload watcher stats the file. Cheap, but pointless to do
 // on every video_tick — the user is unlikely to overwrite the file >1x/sec.
@@ -73,6 +77,7 @@ struct rive_source {
 	char *path;
 	char *artboard;
 	char *state_machine;
+	char *data_path; // optional JSON file feeding the custom view model
 	uint32_t width;
 	uint32_t height;
 	char *fit;
@@ -89,6 +94,9 @@ struct rive_source {
 	// OBS frontend event -> Rive trigger plumbing.
 	rive_events_t *events;
 
+	// Per-tick OBS scene snapshot pushed into the renderer's SceneViewModel.
+	obs_scene_state_collector_t *scene_state;
+
 	// Last (path, artboard, state_machine) triple successfully pushed into
 	// the renderer. Used to detect SM identity changes so we can reset the
 	// events module's one-shot warnings without spamming on unrelated
@@ -100,6 +108,14 @@ struct rive_source {
 	// Hot-reload watcher state. Only touched on the graphics thread.
 	int64_t file_mtime; // mtime in seconds of the currently loaded file
 	float watch_accum;  // seconds accumulated since the last stat()
+
+	// Custom-data JSON watcher state. Always polled (independent of the
+	// SK_HOT_RELOAD toggle, which only governs the .riv file) — there's no
+	// other reasonable cadence for picking up external data writes.
+	int64_t data_mtime;       // mtime in seconds of the currently loaded JSON
+	float data_watch_accum;   // seconds accumulated since the last stat()
+	obs_data_t *data_payload; // last successfully parsed JSON, or NULL
+	char *data_logged_error;  // de-dup memo for parse failures
 
 	// Status surface. Written by the graphics thread (on load success /
 	// failure), read by the UI thread (when populating the properties
@@ -135,12 +151,21 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	const char *sm = obs_data_get_string(settings, SK_STATE_MACHINE);
 	const char *fit = obs_data_get_string(settings, SK_FIT);
 	const char *align = obs_data_get_string(settings, SK_ALIGNMENT);
+	const char *data_path = obs_data_get_string(settings, SK_DATA_FILE);
+
+	// Detect data-path edits so we can drop the old payload immediately
+	// rather than serving stale JSON until the next mtime change. Inline
+	// the comparison because str_equal_or_null is defined further down.
+	const char *prev_dp = ctx->data_path ? ctx->data_path : "";
+	const char *new_dp = data_path ? data_path : "";
+	const bool data_path_changed = strcmp(prev_dp, new_dp) != 0;
 
 	replace_str(&ctx->path, path);
 	replace_str(&ctx->artboard, artboard);
 	replace_str(&ctx->state_machine, sm);
 	replace_str(&ctx->fit, fit);
 	replace_str(&ctx->alignment, align);
+	replace_str(&ctx->data_path, data_path);
 
 	long long w = obs_data_get_int(settings, SK_WIDTH);
 	long long h = obs_data_get_int(settings, SK_HEIGHT);
@@ -157,6 +182,20 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	// (or one whose path field was edited by hand) updates its baseline.
 	ctx->file_mtime = 0;
 	ctx->watch_accum = HOT_RELOAD_POLL_SECONDS;
+
+	if (data_path_changed) {
+		// Drop any cached payload tied to the previous file so the
+		// next tick starts fresh against whatever the new path resolves
+		// to (or no payload at all when cleared).
+		if (ctx->data_payload) {
+			obs_data_release(ctx->data_payload);
+			ctx->data_payload = NULL;
+		}
+		bfree(ctx->data_logged_error);
+		ctx->data_logged_error = NULL;
+		ctx->data_mtime = 0;
+		ctx->data_watch_accum = HOT_RELOAD_POLL_SECONDS;
+	}
 }
 
 // ---- status surface --------------------------------------------------------
@@ -348,6 +387,55 @@ static void rive_source_poll_hot_reload(struct rive_source *ctx, float dt)
 	}
 }
 
+// Polls the user-supplied JSON file's mtime; when it changes (or on first
+// load), parses it via the OBS data API and stashes the result in
+// ctx->data_payload for the next push into the renderer. Cheap (one stat()
+// + one parse on change) and rate-limited like the .riv hot-reload watcher.
+static void rive_source_poll_data_file(struct rive_source *ctx, float dt)
+{
+	if (!ctx->data_path || !*ctx->data_path)
+		return;
+	ctx->data_watch_accum += dt;
+	if (ctx->data_watch_accum < HOT_RELOAD_POLL_SECONDS)
+		return;
+	ctx->data_watch_accum = 0.f;
+
+	struct stat sb;
+	if (stat(ctx->data_path, &sb) != 0) {
+		// Log once per distinct error; transient races (file being
+		// written by an external tool) are common, so don't spam.
+		const char *msg = "stat failed";
+		if (!ctx->data_logged_error || strcmp(ctx->data_logged_error, msg) != 0) {
+			bfree(ctx->data_logged_error);
+			ctx->data_logged_error = bstrdup(msg);
+			obs_log(LOG_WARNING, "rive: data file unreadable: %s", ctx->data_path);
+		}
+		return;
+	}
+	const int64_t mtime = (int64_t)sb.st_mtime;
+	if (mtime == ctx->data_mtime && ctx->data_payload)
+		return;
+
+	obs_data_t *parsed = obs_data_create_from_json_file(ctx->data_path);
+	if (!parsed) {
+		const char *msg = "parse failed";
+		if (!ctx->data_logged_error || strcmp(ctx->data_logged_error, msg) != 0) {
+			bfree(ctx->data_logged_error);
+			ctx->data_logged_error = bstrdup(msg);
+			obs_log(LOG_WARNING, "rive: data file is not valid JSON: %s",
+				ctx->data_path);
+		}
+		return;
+	}
+
+	if (ctx->data_payload)
+		obs_data_release(ctx->data_payload);
+	ctx->data_payload = parsed;
+	ctx->data_mtime = mtime;
+	bfree(ctx->data_logged_error);
+	ctx->data_logged_error = NULL;
+}
+
 // ---- lifecycle -------------------------------------------------------------
 
 static void *rive_source_create(obs_data_t *settings, obs_source_t *source)
@@ -361,6 +449,8 @@ static void *rive_source_create(obs_data_t *settings, obs_source_t *source)
 	// exists.
 	ctx->events = rive_events_create();
 	rive_events_attach(ctx->events);
+
+	ctx->scene_state = obs_scene_state_create();
 
 	rive_source_apply_settings(ctx, settings);
 	rive_events_update_mapping(ctx->events, settings);
@@ -378,6 +468,10 @@ static void rive_source_destroy(void *data)
 		rive_events_destroy(ctx->events);
 		ctx->events = NULL;
 	}
+	if (ctx->scene_state) {
+		obs_scene_state_destroy(ctx->scene_state);
+		ctx->scene_state = NULL;
+	}
 	if (ctx->renderer) {
 		obs_enter_graphics();
 		rive_renderer_destroy(ctx->renderer);
@@ -387,6 +481,7 @@ static void rive_source_destroy(void *data)
 	bfree(ctx->path);
 	bfree(ctx->artboard);
 	bfree(ctx->state_machine);
+	bfree(ctx->data_path);
 	bfree(ctx->fit);
 	bfree(ctx->alignment);
 	bfree(ctx->synced_path);
@@ -394,6 +489,11 @@ static void rive_source_destroy(void *data)
 	bfree(ctx->synced_state_machine);
 	bfree(ctx->last_error);
 	bfree(ctx->logged_error);
+	bfree(ctx->data_logged_error);
+	if (ctx->data_payload) {
+		obs_data_release(ctx->data_payload);
+		ctx->data_payload = NULL;
+	}
 	pthread_mutex_destroy(&ctx->status_mu);
 	obs_log(LOG_INFO, "Rive source destroyed");
 	bfree(ctx);
@@ -413,12 +513,25 @@ static void rive_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, SK_FILE, "");
 	obs_data_set_default_string(settings, SK_ARTBOARD, "");
 	obs_data_set_default_string(settings, SK_STATE_MACHINE, "");
-	obs_data_set_default_int(settings, SK_WIDTH, RIVE_SOURCE_DEFAULT_WIDTH);
-	obs_data_set_default_int(settings, SK_HEIGHT, RIVE_SOURCE_DEFAULT_HEIGHT);
+
+	// Default to the active OBS canvas size so a freshly added source
+	// covers the scene without manual tweaking. obs_get_video_info returns
+	// false if video isn't initialized yet (rare, but possible during
+	// module load) — fall back to the static defaults in that case.
+	uint32_t default_width = RIVE_SOURCE_DEFAULT_WIDTH;
+	uint32_t default_height = RIVE_SOURCE_DEFAULT_HEIGHT;
+	struct obs_video_info ovi;
+	if (obs_get_video_info(&ovi) && ovi.base_width > 0 && ovi.base_height > 0) {
+		default_width = ovi.base_width;
+		default_height = ovi.base_height;
+	}
+	obs_data_set_default_int(settings, SK_WIDTH, default_width);
+	obs_data_set_default_int(settings, SK_HEIGHT, default_height);
 	obs_data_set_default_string(settings, SK_FIT, "contain");
 	obs_data_set_default_string(settings, SK_ALIGNMENT, "center");
 	obs_data_set_default_int(settings, SK_BG_COLOR, 0x00000000);
 	obs_data_set_default_bool(settings, SK_HOT_RELOAD, false);
+	obs_data_set_default_string(settings, SK_DATA_FILE, "");
 
 	// Event-mapping fields default to empty (= unmapped, event ignored).
 	const size_t n = rive_events_count();
@@ -616,6 +729,11 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 	obs_properties_add_bool(props, SK_HOT_RELOAD, obs_module_text("HotReload"));
 
+	// Optional JSON file feeding the user-defined view model. Polled once
+	// per second; see rive_custom_data.h for the value-mapping contract.
+	obs_properties_add_path(props, SK_DATA_FILE, obs_module_text("DataFile"),
+				OBS_PATH_FILE, "JSON files (*.json);;All files (*.*)", NULL);
+
 	// Event mapping table. Events are emitted by the events module in a
 	// stable order grouped by category; we walk that order, opening a new
 	// obs_properties_add_group whenever the group id changes. Each entry
@@ -680,6 +798,7 @@ static void rive_source_video_tick(void *data, float seconds)
 		return;
 
 	rive_source_poll_hot_reload(ctx, seconds);
+	rive_source_poll_data_file(ctx, seconds);
 	rive_source_sync_renderer(ctx);
 
 	// Fire any frontend-event-mapped triggers *before* advance so the SM
@@ -688,6 +807,24 @@ static void rive_source_video_tick(void *data, float seconds)
 		rive_events_drain(ctx->events, rive_source_fire_trigger, ctx);
 
 	if (ctx->renderer) {
+		// Push the current OBS scene snapshot into the renderer's
+		// SceneViewModel (silently no-ops if the .riv doesn't declare
+		// one). Done *before* advance so this frame's state machine
+		// can react to the new values.
+		if (ctx->scene_state) {
+			const struct rive_scene_state *state =
+				obs_scene_state_refresh(ctx->scene_state);
+			rive_renderer_apply_scene_state(ctx->renderer, state);
+		}
+
+		// Re-apply the cached JSON payload every tick. Cheap because
+		// every scalar setter checks equality before writing; pushing
+		// it again on each frame keeps things consistent if the SM
+		// reset or rebound (e.g. via a state change) since the last
+		// snapshot.
+		if (ctx->data_payload)
+			rive_renderer_apply_custom_data(ctx->renderer, ctx->data_payload);
+
 		rive_renderer_advance(ctx->renderer, seconds);
 		rive_renderer_render(ctx->renderer, ctx->fit, ctx->alignment, ctx->bg_color);
 	}
