@@ -104,12 +104,14 @@ SceneViewModelBinding::tryCreate(rive::File *file, rive::StateMachineInstance *s
 		return nullptr;
 	}
 
-	// Prefer the file's default instance (the editor's "Default" instance)
-	// so the author can configure starting values; fall back to a fresh
-	// blank instance if the file has no instances at all.
-	rive::rcp<rive::ViewModelInstanceRuntime> root = vm->createDefaultInstance();
-	if (!root)
-		root = vm->createInstance();
+	// DIAGNOSTIC: createInstance instead of createDefaultInstance — gives
+	// us a *blank* SceneViewModel rather than a clone of the editor's
+	// Default instance. If the display now shows empty values instead of
+	// the editor defaults, the artboard's data bindings ARE reading our
+	// bound instance (and the prior "default values" the user saw came
+	// from the cloned default). If it still shows the original defaults,
+	// the bindings are resolving to a different instance entirely.
+	rive::rcp<rive::ViewModelInstanceRuntime> root = vm->createInstance();
 	if (!root)
 		return nullptr;
 

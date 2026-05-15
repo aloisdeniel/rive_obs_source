@@ -42,7 +42,6 @@ target_sources(
     src/plugin-main.c
     src/rive_probe.cpp
     src/rive_file.cpp
-    src/obs_events.cpp
     src/obs_scene_state.c
     src/rive_scene_view_model.cpp
     src/rive_custom_data.cpp

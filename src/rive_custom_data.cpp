@@ -56,8 +56,21 @@ void set_string_if_present(rive::ViewModelInstanceRuntime *vm, const char *name,
 	if (!p)
 		return;
 	std::string desired = value ? value : "";
-	if (p->value() != desired)
+	if (p->value() != desired) {
 		p->value(desired);
+		obs_log(LOG_INFO,
+			"rive: set string '%s'.'%s' = '%s' (read-back: '%s', vm=%p, prop=%p)",
+			vm->viewModelName().c_str(), name, desired.c_str(),
+			p->value().c_str(), (void *)vm, (void *)p);
+		FILE *f = std::fopen("/tmp/rive-bind.log", "a");
+		if (f) {
+			std::fprintf(f,
+				"set string '%s' vm=%p underlying=%p value=%s\n",
+				name, (void *)vm,
+				(void *)vm->instance().get(), desired.c_str());
+			std::fclose(f);
+		}
+	}
 }
 
 void set_number_if_present(rive::ViewModelInstanceRuntime *vm, const char *name, double value)
@@ -104,8 +117,11 @@ void set_image_if_present(rive::ViewModelInstanceRuntime *vm, const char *name,
 	if (!cache)
 		return;
 	rive::RenderImage *img = cache->request(url);
-	if (img)
+	if (img) {
 		p->value(img);
+		obs_log(LOG_INFO, "rive: set image '%s'.'%s' = '%s'",
+			vm->viewModelName().c_str(), name, url);
+	}
 }
 
 // Reads obj[key] as a string, or "" if absent / wrong type.
@@ -270,6 +286,37 @@ void CustomDataBinding::apply(obs_data_t *data)
 			obs_log(LOG_INFO, "rive: custom data target = '%s'",
 				m_root->viewModelName().c_str());
 		}
+
+		// One-shot dump of the routed target's properties so we can see at
+		// a glance whether the JSON keys have any chance of matching.
+		auto dump_props = [](const char *label,
+				     rive::ViewModelInstanceRuntime *vm) {
+			if (!vm)
+				return;
+			const auto props = vm->properties();
+			for (const auto &pd : props) {
+				const char *t = "?";
+				switch (pd.type) {
+				case rive::DataType::string: t = "string"; break;
+				case rive::DataType::number: t = "number"; break;
+				case rive::DataType::boolean: t = "boolean"; break;
+				case rive::DataType::color: t = "color"; break;
+				case rive::DataType::list: t = "list"; break;
+				case rive::DataType::enumType: t = "enum"; break;
+				case rive::DataType::trigger: t = "trigger"; break;
+				case rive::DataType::viewModel: t = "viewModel"; break;
+				case rive::DataType::assetImage: t = "image"; break;
+				case rive::DataType::artboard: t = "artboard"; break;
+				default: break;
+				}
+				obs_log(LOG_INFO, "rive: %s '%s'.'%s' : %s",
+					label, vm->viewModelName().c_str(),
+					pd.name.c_str(), t);
+			}
+		};
+		dump_props("root prop", m_root);
+		if (m_jsonTarget && m_jsonTarget != m_root)
+			dump_props("target prop", m_jsonTarget);
 	}
 
 	// Detect a root-id change. Only meaningful when we own the root —

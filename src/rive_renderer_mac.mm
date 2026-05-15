@@ -31,6 +31,7 @@
 #include <rive/layout.hpp>
 #include <rive/animation/state_machine_instance.hpp>
 #include <rive/animation/state_machine_input_instance.hpp>
+#include <rive/viewmodel/runtime/viewmodel_runtime.hpp>
 #include <rive/renderer/render_context.hpp>
 #include <rive/renderer/rive_renderer.hpp>
 #include <rive/renderer/metal/render_context_metal_impl.h>
@@ -332,6 +333,15 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 	r->loadedPath = path;
 	r->loadedArtboard = artboard_name;
 	r->loadedStateMachine = sm_name;
+
+	// Log the artboard's primary VM so we can tell whether it's
+	// SceneViewModel-based or uses a different VM as its data context.
+	if (auto *defaultVm = r->file->defaultArtboardViewModel(r->artboard.get())) {
+		obs_log(LOG_INFO, "rive: artboard primary view model = '%s'",
+			defaultVm->name().c_str());
+	} else {
+		obs_log(LOG_INFO, "rive: artboard has no primary view model");
+	}
 
 	// Optional: bind the SceneViewModel to the SM. tryCreate returns null
 	// when the file has no view model by that name, which is the normal

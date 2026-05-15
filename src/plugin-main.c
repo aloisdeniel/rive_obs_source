@@ -16,7 +16,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "obs_events.h"
 #include "obs_scene_state.h"
 #include "rive_file.h"
 #include "rive_renderer.h"
@@ -44,14 +43,14 @@ extern void *rive_obs_link_probe(void);
 #define SK_FIT "fit"
 #define SK_ALIGNMENT "alignment"
 #define SK_BG_COLOR "bg_color"
-#define SK_HOT_RELOAD "hot_reload"
 #define SK_STATUS "status"
 #define SK_REFRESH "refresh"
 #define SK_DATA_FILE "data_file"
 
-// How often the hot-reload watcher stats the file. Cheap, but pointless to do
-// on every video_tick — the user is unlikely to overwrite the file >1x/sec.
-#define HOT_RELOAD_POLL_SECONDS 1.0f
+// How often the file watchers stat their respective paths. Cheap, but
+// pointless to do on every video_tick — the user is unlikely to overwrite a
+// file more than once per second.
+#define FILE_WATCH_POLL_SECONDS 1.0f
 
 // Fit / alignment values are persisted as strings so future renderer code can
 // map them to rive::Fit / rive::Alignment without an int-vs-enum coupling.
@@ -83,7 +82,6 @@ struct rive_source {
 	char *fit;
 	char *alignment;
 	uint32_t bg_color; // RGBA, premultiplied later in render
-	bool hot_reload;   // poll the .riv on disk and reload on mtime change
 
 	// GPU renderer (created lazily on the graphics thread). Owned.
 	rive_renderer_t *renderer;
@@ -91,27 +89,16 @@ struct rive_source {
 	// file / size on the next graphics-thread tick.
 	bool dirty;
 
-	// OBS frontend event -> Rive trigger plumbing.
-	rive_events_t *events;
-
 	// Per-tick OBS scene snapshot pushed into the renderer's SceneViewModel.
 	obs_scene_state_collector_t *scene_state;
 
-	// Last (path, artboard, state_machine) triple successfully pushed into
-	// the renderer. Used to detect SM identity changes so we can reset the
-	// events module's one-shot warnings without spamming on unrelated
-	// settings updates (e.g. bg color).
-	char *synced_path;
-	char *synced_artboard;
-	char *synced_state_machine;
-
-	// Hot-reload watcher state. Only touched on the graphics thread.
+	// .riv watcher state. Always polled — there's no reasonable cadence for
+	// picking up external file changes other than once per second. Only
+	// touched on the graphics thread.
 	int64_t file_mtime; // mtime in seconds of the currently loaded file
 	float watch_accum;  // seconds accumulated since the last stat()
 
-	// Custom-data JSON watcher state. Always polled (independent of the
-	// SK_HOT_RELOAD toggle, which only governs the .riv file) — there's no
-	// other reasonable cadence for picking up external data writes.
+	// Custom-data JSON watcher state. Same cadence as the .riv watcher.
 	int64_t data_mtime;       // mtime in seconds of the currently loaded JSON
 	float data_watch_accum;   // seconds accumulated since the last stat()
 	obs_data_t *data_payload; // last successfully parsed JSON, or NULL
@@ -154,8 +141,7 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	const char *data_path = obs_data_get_string(settings, SK_DATA_FILE);
 
 	// Detect data-path edits so we can drop the old payload immediately
-	// rather than serving stale JSON until the next mtime change. Inline
-	// the comparison because str_equal_or_null is defined further down.
+	// rather than serving stale JSON until the next mtime change.
 	const char *prev_dp = ctx->data_path ? ctx->data_path : "";
 	const char *new_dp = data_path ? data_path : "";
 	const bool data_path_changed = strcmp(prev_dp, new_dp) != 0;
@@ -172,7 +158,6 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	ctx->width = (w > 0) ? (uint32_t)w : RIVE_SOURCE_DEFAULT_WIDTH;
 	ctx->height = (h > 0) ? (uint32_t)h : RIVE_SOURCE_DEFAULT_HEIGHT;
 	ctx->bg_color = (uint32_t)obs_data_get_int(settings, SK_BG_COLOR);
-	ctx->hot_reload = obs_data_get_bool(settings, SK_HOT_RELOAD);
 
 	// Tell the graphics-thread tick to push these into the renderer on its
 	// next pass. We deliberately do not touch ctx->renderer from here — the
@@ -181,7 +166,7 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 	// Force the mtime watcher to re-stat next tick so a freshly chosen file
 	// (or one whose path field was edited by hand) updates its baseline.
 	ctx->file_mtime = 0;
-	ctx->watch_accum = HOT_RELOAD_POLL_SECONDS;
+	ctx->watch_accum = FILE_WATCH_POLL_SECONDS;
 
 	if (data_path_changed) {
 		// Drop any cached payload tied to the previous file so the
@@ -194,7 +179,7 @@ static void rive_source_apply_settings(struct rive_source *ctx, obs_data_t *sett
 		bfree(ctx->data_logged_error);
 		ctx->data_logged_error = NULL;
 		ctx->data_mtime = 0;
-		ctx->data_watch_accum = HOT_RELOAD_POLL_SECONDS;
+		ctx->data_watch_accum = FILE_WATCH_POLL_SECONDS;
 	}
 }
 
@@ -253,17 +238,8 @@ static char *rive_source_format_status(struct rive_source *ctx)
 	} else {
 		n = snprintf(buf, sizeof(buf), "Loading: %s", ctx->path);
 	}
-	if (ctx->hot_reload)
-		n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\n[Hot reload: enabled]");
 	(void)n;
 	return bstrdup(buf);
-}
-
-static bool str_equal_or_null(const char *a, const char *b)
-{
-	const char *aa = a ? a : "";
-	const char *bb = b ? b : "";
-	return strcmp(aa, bb) == 0;
 }
 
 // Logs an error if (and only if) the message differs from the last one we
@@ -338,31 +314,18 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 	bfree(ctx->logged_error);
 	ctx->logged_error = NULL;
 	rive_source_set_status(ctx, true, NULL);
-
-	// If the SM identity actually changed (not just bg color or fit),
-	// drop memoized "unknown trigger" warnings so a name that's now valid
-	// stops warning and a name that's still invalid warns once for the
-	// new SM.
-	const bool sm_changed = !str_equal_or_null(ctx->synced_path, ctx->path) ||
-				!str_equal_or_null(ctx->synced_artboard, ctx->artboard) ||
-				!str_equal_or_null(ctx->synced_state_machine, ctx->state_machine);
-	if (sm_changed && ctx->events) {
-		rive_events_reset_warnings(ctx->events);
-		replace_str(&ctx->synced_path, ctx->path);
-		replace_str(&ctx->synced_artboard, ctx->artboard);
-		replace_str(&ctx->synced_state_machine, ctx->state_machine);
-	}
 }
 
 // Polls the .riv file's mtime. If it changed since the last successful load,
 // mark the source dirty so rive_source_sync_renderer reloads it next tick.
-// Cheap (one stat()) and rate-limited to HOT_RELOAD_POLL_SECONDS.
-static void rive_source_poll_hot_reload(struct rive_source *ctx, float dt)
+// Cheap (one stat()) and rate-limited to FILE_WATCH_POLL_SECONDS. Always on:
+// authors expect to export from Rive and see the new file pick up in OBS.
+static void rive_source_poll_file_reload(struct rive_source *ctx, float dt)
 {
-	if (!ctx->hot_reload || !ctx->path || !*ctx->path)
+	if (!ctx->path || !*ctx->path)
 		return;
 	ctx->watch_accum += dt;
-	if (ctx->watch_accum < HOT_RELOAD_POLL_SECONDS)
+	if (ctx->watch_accum < FILE_WATCH_POLL_SECONDS)
 		return;
 	ctx->watch_accum = 0.f;
 
@@ -390,13 +353,13 @@ static void rive_source_poll_hot_reload(struct rive_source *ctx, float dt)
 // Polls the user-supplied JSON file's mtime; when it changes (or on first
 // load), parses it via the OBS data API and stashes the result in
 // ctx->data_payload for the next push into the renderer. Cheap (one stat()
-// + one parse on change) and rate-limited like the .riv hot-reload watcher.
+// + one parse on change) and rate-limited like the .riv watcher.
 static void rive_source_poll_data_file(struct rive_source *ctx, float dt)
 {
 	if (!ctx->data_path || !*ctx->data_path)
 		return;
 	ctx->data_watch_accum += dt;
-	if (ctx->data_watch_accum < HOT_RELOAD_POLL_SECONDS)
+	if (ctx->data_watch_accum < FILE_WATCH_POLL_SECONDS)
 		return;
 	ctx->data_watch_accum = 0.f;
 
@@ -444,16 +407,9 @@ static void *rive_source_create(obs_data_t *settings, obs_source_t *source)
 	ctx->source = source;
 	pthread_mutex_init(&ctx->status_mu, NULL);
 
-	// Subscribe to obs-frontend events here (per-source, not in
-	// obs_module_load) so the callback never fires before the source
-	// exists.
-	ctx->events = rive_events_create();
-	rive_events_attach(ctx->events);
-
 	ctx->scene_state = obs_scene_state_create();
 
 	rive_source_apply_settings(ctx, settings);
-	rive_events_update_mapping(ctx->events, settings);
 
 	obs_log(LOG_INFO, "Rive source created (file='%s')", ctx->path ? ctx->path : "");
 	return ctx;
@@ -464,10 +420,6 @@ static void rive_source_destroy(void *data)
 	struct rive_source *ctx = data;
 	if (!ctx)
 		return;
-	if (ctx->events) {
-		rive_events_destroy(ctx->events);
-		ctx->events = NULL;
-	}
 	if (ctx->scene_state) {
 		obs_scene_state_destroy(ctx->scene_state);
 		ctx->scene_state = NULL;
@@ -484,9 +436,6 @@ static void rive_source_destroy(void *data)
 	bfree(ctx->data_path);
 	bfree(ctx->fit);
 	bfree(ctx->alignment);
-	bfree(ctx->synced_path);
-	bfree(ctx->synced_artboard);
-	bfree(ctx->synced_state_machine);
 	bfree(ctx->last_error);
 	bfree(ctx->logged_error);
 	bfree(ctx->data_logged_error);
@@ -505,7 +454,6 @@ static void rive_source_update(void *data, obs_data_t *settings)
 	if (!ctx)
 		return;
 	rive_source_apply_settings(ctx, settings);
-	rive_events_update_mapping(ctx->events, settings);
 }
 
 static void rive_source_get_defaults(obs_data_t *settings)
@@ -530,16 +478,7 @@ static void rive_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, SK_FIT, "contain");
 	obs_data_set_default_string(settings, SK_ALIGNMENT, "center");
 	obs_data_set_default_int(settings, SK_BG_COLOR, 0x00000000);
-	obs_data_set_default_bool(settings, SK_HOT_RELOAD, false);
 	obs_data_set_default_string(settings, SK_DATA_FILE, "");
-
-	// Event-mapping fields default to empty (= unmapped, event ignored).
-	const size_t n = rive_events_count();
-	for (size_t i = 0; i < n; ++i) {
-		const char *key = rive_events_setting_key(i);
-		if (key)
-			obs_data_set_default_string(settings, key, "");
-	}
 }
 
 static uint32_t rive_source_get_width(void *data)
@@ -727,39 +666,10 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 	obs_properties_add_color_alpha(props, SK_BG_COLOR, obs_module_text("BackgroundColor"));
 
-	obs_properties_add_bool(props, SK_HOT_RELOAD, obs_module_text("HotReload"));
-
 	// Optional JSON file feeding the user-defined view model. Polled once
 	// per second; see rive_custom_data.h for the value-mapping contract.
 	obs_properties_add_path(props, SK_DATA_FILE, obs_module_text("DataFile"),
 				OBS_PATH_FILE, "JSON files (*.json);;All files (*.*)", NULL);
-
-	// Event mapping table. Events are emitted by the events module in a
-	// stable order grouped by category; we walk that order, opening a new
-	// obs_properties_add_group whenever the group id changes. Each entry
-	// is a free-form text field naming a Rive trigger input.
-	const size_t evt_count = rive_events_count();
-	obs_properties_t *grp = NULL;
-	const char *cur_group_id = NULL;
-	for (size_t i = 0; i < evt_count; ++i) {
-		const char *gid = rive_events_group(i);
-		if (!cur_group_id || strcmp(cur_group_id, gid) != 0) {
-			if (grp) {
-				obs_properties_add_group(props, cur_group_id,
-							 rive_events_group_label(i - 1),
-							 OBS_GROUP_NORMAL, grp);
-			}
-			grp = obs_properties_create();
-			cur_group_id = gid;
-		}
-		obs_properties_add_text(grp, rive_events_setting_key(i), rive_events_label(i),
-					OBS_TEXT_DEFAULT);
-	}
-	if (grp) {
-		obs_properties_add_group(props, cur_group_id,
-					 rive_events_group_label(evt_count - 1),
-					 OBS_GROUP_NORMAL, grp);
-	}
 
 	// Pre-populate the dropdowns based on the source's current settings so
 	// the panel shows real choices the first time it opens.
@@ -776,35 +686,15 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 // ---- render ----------------------------------------------------------------
 
-// Drain callback target. Runs on the graphics thread, where touching the
-// state machine is safe. Returning false signals "input not found on the
-// active SM" so the events module logs a one-shot warning; when the SM
-// itself isn't loaded yet we report true (silent drop) so transient
-// pre-load events don't spam warnings.
-static bool rive_source_fire_trigger(const char *name, void *user)
-{
-	struct rive_source *ctx = user;
-	if (!ctx || !ctx->renderer)
-		return true;
-	if (!rive_renderer_has_state_machine(ctx->renderer))
-		return true;
-	return rive_renderer_fire_trigger(ctx->renderer, name);
-}
-
 static void rive_source_video_tick(void *data, float seconds)
 {
 	struct rive_source *ctx = data;
 	if (!ctx)
 		return;
 
-	rive_source_poll_hot_reload(ctx, seconds);
+	rive_source_poll_file_reload(ctx, seconds);
 	rive_source_poll_data_file(ctx, seconds);
 	rive_source_sync_renderer(ctx);
-
-	// Fire any frontend-event-mapped triggers *before* advance so the SM
-	// can react to them this frame.
-	if (ctx->events)
-		rive_events_drain(ctx->events, rive_source_fire_trigger, ctx);
 
 	if (ctx->renderer) {
 		// Push the current OBS scene snapshot into the renderer's
