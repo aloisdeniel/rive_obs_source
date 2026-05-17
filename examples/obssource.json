@@ -1,0 +1,6 @@
+{
+    "id": "obs-source",
+    "type": "CustomDataViewModel",
+    "avatar": "https://picsum.photos/300/300",
+    "topic": "What's new in Rive?!"
+}
