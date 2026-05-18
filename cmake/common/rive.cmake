@@ -67,14 +67,20 @@ set(
   "--file=${CMAKE_SOURCE_DIR}/cmake/rive/rive_obs_workspace.lua"
   "--with_rive_text"
   "--with_rive_layout"
-  "--with-pic"
 )
 
 if(APPLE)
   # OBS plugins on macOS ship as universal binaries (arm64 + x86_64).
-  list(APPEND _rive_build_args "--arch=universal")
+  # Static libs are linked into a shared plugin, so they must be PIC.
+  list(APPEND _rive_build_args "--with-pic" "--arch=universal")
 elseif(WIN32)
+  # No --with-pic on Windows: rive's premake config maps it to -fPIC, which
+  # clang-cl rejects (-Werror,-Wunknown-argument). PE/COFF is position-
+  # independent by design, so the flag is unnecessary here anyway.
   list(APPEND _rive_build_args "--arch=x64")
+else()
+  # Linux: static libs are linked into a shared .so, so they must be PIC.
+  list(APPEND _rive_build_args "--with-pic")
 endif()
 
 # Custom command that drives the rive build. We redirect outputs outside the
