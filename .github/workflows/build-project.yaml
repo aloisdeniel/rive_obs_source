@@ -259,6 +259,9 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: Enable Git Long Paths 📏
+        run: git config --global core.longpaths true
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
