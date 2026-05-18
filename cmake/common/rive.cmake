@@ -97,7 +97,8 @@ file(RELATIVE_PATH _rive_out_rel "${RIVE_RUNTIME_DIR}" "${RIVE_OUT_DIR}")
 # to clear any stale empty output dir.
 set(_rive_clean_script "${RIVE_BUILD_DIR}/clean_stale_rive_out.cmake")
 file(
-  WRITE "${_rive_clean_script}"
+  WRITE
+  "${_rive_clean_script}"
   "if(EXISTS \"\${RIVE_OUT}\" AND NOT EXISTS \"\${RIVE_OUT}/.rive_premake_args\")
   message(STATUS \"Removing stale rive output dir: \${RIVE_OUT}\")
   file(REMOVE_RECURSE \"\${RIVE_OUT}\")
