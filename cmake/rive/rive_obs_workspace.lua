@@ -13,8 +13,16 @@
 -- so the invocation CWD is rive-runtime root. Premake5's --file= changes its
 -- internal CWD to this script's directory, so we use _WORKING_DIR (premake's
 -- record of the original invocation directory) to recover rive root.
+--
+-- On Windows the build is driven through build_rive.ps1, which only resolves
+-- `sh build_rive.sh` when CWD is rive-runtime's build/ dir. premake5 therefore
+-- inherits _WORKING_DIR = <rive root>/build rather than <rive root>. Detect
+-- that by checking for premake5_v2.lua and walk up one level if needed.
 
 local rive_root = _WORKING_DIR
+if not os.isfile(rive_root .. '/premake5_v2.lua') then
+    rive_root = path.getabsolute(rive_root .. '/..')
+end
 
 -- rive core + transitive deps (harfbuzz, sheenbidi, miniaudio, yoga, luau_vm stub).
 -- premake5_v2.lua does `path.getabsolute('dependencies/')`, so CWD = rive root.
