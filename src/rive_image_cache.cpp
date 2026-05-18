@@ -69,8 +69,7 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out, std::string &
 
 } // namespace
 
-ImageCache::ImageCache(Decoder decoder)
-	: m_decoder(std::move(decoder)), m_results(std::make_shared<ResultQueue>())
+ImageCache::ImageCache(Decoder decoder) : m_decoder(std::move(decoder)), m_results(std::make_shared<ResultQueue>())
 {
 	m_worker = std::thread(&ImageCache::workerLoop, this);
 }
@@ -124,8 +123,7 @@ void ImageCache::tick()
 
 		if (!r.error.empty()) {
 			it->second.state = State::Failed;
-			obs_log(LOG_WARNING, "rive: image fetch failed for '%s': %s",
-				r.url.c_str(), r.error.c_str());
+			obs_log(LOG_WARNING, "rive: image fetch failed for '%s': %s", r.url.c_str(), r.error.c_str());
 			continue;
 		}
 
@@ -134,15 +132,13 @@ void ImageCache::tick()
 			img = m_decoder(r.bytes.data(), r.bytes.size());
 		if (!img) {
 			it->second.state = State::Failed;
-			obs_log(LOG_WARNING,
-				"rive: image decode failed for '%s' (%zu bytes)",
-				r.url.c_str(), r.bytes.size());
+			obs_log(LOG_WARNING, "rive: image decode failed for '%s' (%zu bytes)", r.url.c_str(),
+				r.bytes.size());
 			continue;
 		}
 		it->second.state = State::Loaded;
 		it->second.image = std::move(img);
-		obs_log(LOG_INFO, "rive: image loaded '%s' (%zu bytes)", r.url.c_str(),
-			r.bytes.size());
+		obs_log(LOG_INFO, "rive: image loaded '%s' (%zu bytes)", r.url.c_str(), r.bytes.size());
 	}
 }
 
@@ -162,9 +158,7 @@ void ImageCache::workerLoop(ImageCache *self)
 		std::string url;
 		{
 			std::unique_lock<std::mutex> lk(self->m_jobs_mu);
-			self->m_jobs_cv.wait(lk, [self] {
-				return self->m_worker_quit || !self->m_jobs.empty();
-			});
+			self->m_jobs_cv.wait(lk, [self] { return self->m_worker_quit || !self->m_jobs.empty(); });
 			if (self->m_worker_quit && self->m_jobs.empty())
 				return;
 			url = std::move(self->m_jobs.back());

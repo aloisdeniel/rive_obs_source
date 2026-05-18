@@ -220,9 +220,8 @@ bool allocate_target_resources(rive_renderer *r, char *err, size_t err_size)
 	}
 
 	HANDLE handle = nullptr;
-	hr = dxgiRes->CreateSharedHandle(nullptr,
-					 DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-					 nullptr, &handle);
+	hr = dxgiRes->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+					 &handle);
 	if (FAILED(hr) || !handle) {
 		set_err(err, err_size, "CreateSharedHandle failed");
 		return false;
@@ -287,14 +286,12 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 	}
 
 	rive::ImportResult result = rive::ImportResult::malformed;
-	rive::rcp<rive::File> file =
-		rive::File::import(rive::Span<const uint8_t>(bytes.data(), bytes.size()),
-				   r->renderContext.get(), &result);
+	rive::rcp<rive::File> file = rive::File::import(rive::Span<const uint8_t>(bytes.data(), bytes.size()),
+							r->renderContext.get(), &result);
 	if (!file || result != rive::ImportResult::success) {
 		set_err(err, err_size,
-			result == rive::ImportResult::unsupportedVersion
-				? "unsupported Rive file version"
-				: "malformed Rive file");
+			result == rive::ImportResult::unsupportedVersion ? "unsupported Rive file version"
+									 : "malformed Rive file");
 		return false;
 	}
 
@@ -322,8 +319,7 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 			sm = ab->stateMachineAt(0);
 	}
 	if (!sm && !sm_name.empty()) {
-		obs_log(LOG_WARNING, "rive: state machine '%s' not found on artboard '%s'",
-			sm_name.c_str(),
+		obs_log(LOG_WARNING, "rive: state machine '%s' not found on artboard '%s'", sm_name.c_str(),
 			artboard_name.empty() ? "(default)" : artboard_name.c_str());
 	}
 
@@ -334,8 +330,7 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 	r->loadedArtboard = artboard_name;
 	r->loadedStateMachine = sm_name;
 
-	r->sceneViewModel =
-		rive_obs::SceneViewModelBinding::tryCreate(r->file.get(), r->stateMachine.get());
+	r->sceneViewModel = rive_obs::SceneViewModelBinding::tryCreate(r->file.get(), r->stateMachine.get());
 
 	rive::gpu::RenderContext *rc = r->renderContext.get();
 	r->imageCache = std::make_unique<rive_obs::ImageCache>(
@@ -345,10 +340,9 @@ bool load_content(rive_renderer *r, const std::string &path, const std::string &
 			return rc->decodeImage(rive::Span<const uint8_t>(data, size));
 		});
 
-	r->customData = rive_obs::CustomDataBinding::tryCreate(
-		r->file.get(), r->artboard.get(), r->stateMachine.get(),
-		r->sceneViewModel ? r->sceneViewModel->root() : nullptr,
-		r->imageCache.get());
+	r->customData = rive_obs::CustomDataBinding::tryCreate(r->file.get(), r->artboard.get(), r->stateMachine.get(),
+							       r->sceneViewModel ? r->sceneViewModel->root() : nullptr,
+							       r->imageCache.get());
 
 	return true;
 }
@@ -368,9 +362,8 @@ rive_renderer_t *rive_renderer_create(uint32_t width, uint32_t height, char *err
 	creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 	D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_1};
-	HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, creationFlags,
-				       featureLevels, std::size(featureLevels), D3D11_SDK_VERSION,
-				       r->device.GetAddressOf(), nullptr,
+	HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, creationFlags, featureLevels,
+				       std::size(featureLevels), D3D11_SDK_VERSION, r->device.GetAddressOf(), nullptr,
 				       r->context.GetAddressOf());
 	if (FAILED(hr) || !r->device || !r->context) {
 		set_err(err, err_size, "D3D11CreateDevice failed");
@@ -387,15 +380,13 @@ rive_renderer_t *rive_renderer_create(uint32_t width, uint32_t height, char *err
 		if (SUCCEEDED(dxgiDevice->GetAdapter(adapter.GetAddressOf())) && adapter) {
 			DXGI_ADAPTER_DESC desc{};
 			if (SUCCEEDED(adapter->GetDesc(&desc))) {
-				options.isIntel = desc.VendorId == 0x163C ||
-						  desc.VendorId == 0x8086 ||
+				options.isIntel = desc.VendorId == 0x163C || desc.VendorId == 0x8086 ||
 						  desc.VendorId == 0x8087;
 			}
 		}
 	}
 
-	r->renderContext = rive::gpu::RenderContextD3DImpl::MakeContext(r->device, r->context,
-									options);
+	r->renderContext = rive::gpu::RenderContextD3DImpl::MakeContext(r->device, r->context, options);
 	if (!r->renderContext) {
 		set_err(err, err_size, "RenderContextD3DImpl::MakeContext failed");
 		delete r;
@@ -433,8 +424,7 @@ bool rive_renderer_resize(rive_renderer_t *r, uint32_t width, uint32_t height)
 	r->height = height;
 	char err[256] = {0};
 	if (!allocate_target_resources(r, err, sizeof(err))) {
-		obs_log(LOG_ERROR, "rive: resize to %ux%u failed: %s", width, height,
-			err[0] ? err : "unknown");
+		obs_log(LOG_ERROR, "rive: resize to %ux%u failed: %s", width, height, err[0] ? err : "unknown");
 		return false;
 	}
 	return true;
@@ -472,8 +462,7 @@ void rive_renderer_advance(rive_renderer_t *r, float dt_seconds)
 	r->stateMachine->advanceAndApply(dt_seconds);
 }
 
-void rive_renderer_render(rive_renderer_t *r, const char *fit_value, const char *alignment_value,
-			  uint32_t bg_color)
+void rive_renderer_render(rive_renderer_t *r, const char *fit_value, const char *alignment_value, uint32_t bg_color)
 {
 	if (!r || !r->renderTarget || !r->sharedTexture || !r->sharedMutex)
 		return;

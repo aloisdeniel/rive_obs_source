@@ -24,8 +24,7 @@ void rive_file_close(rive_file_t *file);
 
 size_t rive_file_artboard_count(const rive_file_t *file);
 const char *rive_file_artboard_name(const rive_file_t *file, size_t artboard_idx);
-bool rive_file_artboard_size(const rive_file_t *file, size_t artboard_idx, uint32_t *out_w,
-			     uint32_t *out_h);
+bool rive_file_artboard_size(const rive_file_t *file, size_t artboard_idx, uint32_t *out_w, uint32_t *out_h);
 
 size_t rive_file_state_machine_count(const rive_file_t *file, size_t artboard_idx);
 const char *rive_file_state_machine_name(const rive_file_t *file, size_t artboard_idx, size_t i);
