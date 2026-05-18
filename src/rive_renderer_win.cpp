@@ -25,6 +25,7 @@
 #include <rive/layout.hpp>
 #include <rive/animation/state_machine_instance.hpp>
 #include <rive/animation/state_machine_input_instance.hpp>
+#include <rive/renderer/texture.hpp>
 #include <rive/renderer/render_context.hpp>
 #include <rive/renderer/rive_renderer.hpp>
 #include <rive/renderer/d3d11/render_context_d3d_impl.hpp>
@@ -488,7 +489,8 @@ void rive_renderer_render(rive_renderer_t *r, const char *fit_value, const char 
 		rive::RiveRenderer renderer(r->renderContext.get());
 		renderer.save();
 		renderer.align(parse_fit(fit_value), parse_alignment(alignment_value),
-			       rive::AABB(0, 0, r->width, r->height), r->artboard->bounds());
+			       rive::AABB(0, 0, static_cast<float>(r->width), static_cast<float>(r->height)),
+			       r->artboard->bounds());
 		r->artboard->draw(&renderer);
 		renderer.restore();
 	}
