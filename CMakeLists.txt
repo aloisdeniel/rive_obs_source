@@ -85,10 +85,17 @@ endif()
 # RTTI; match those flags for the files we pull in from that tree so the
 # typeinfo for rive's render base classes (which we don't define here) isn't
 # referenced.
-set_source_files_properties(
-  deps/rive-runtime/utils/no_op_factory.cpp
-  PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-error;-fno-rtti"
-)
+if(MSVC)
+  set_source_files_properties(
+    deps/rive-runtime/utils/no_op_factory.cpp
+    PROPERTIES COMPILE_OPTIONS "/GR-"
+  )
+else()
+  set_source_files_properties(
+    deps/rive-runtime/utils/no_op_factory.cpp
+    PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-error;-fno-rtti"
+  )
+endif()
 add_dependencies(${CMAKE_PROJECT_NAME} rive_runtime_build)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

@@ -107,14 +107,20 @@ endif()
 )
 
 if(WIN32)
-  set(_rive_build_script "${RIVE_RUNTIME_DIR}/build/build_rive.ps1")
+  set(_rive_build_dir "${RIVE_RUNTIME_DIR}/build")
+  set(_rive_build_script "${_rive_build_dir}/build_rive.ps1")
+  # build_rive.ps1 invokes `sh build_rive.sh` by bare name, so it only resolves
+  # when CWD is rive's build/ dir. build_rive.sh in turn resolves $RIVE_OUT
+  # (and premake's _WORKING_DIR) relative to that same CWD, so RIVE_OUT must be
+  # relative to build/, not the rive root.
+  file(RELATIVE_PATH _rive_out_rel_win "${_rive_build_dir}" "${RIVE_OUT_DIR}")
   add_custom_command(
     OUTPUT ${_rive_lib_files}
     COMMAND ${CMAKE_COMMAND} -DRIVE_OUT=${RIVE_OUT_DIR} -P "${_rive_clean_script}"
     COMMAND
-      ${CMAKE_COMMAND} -E env "RIVE_OUT=${_rive_out_rel}" "DEPENDENCIES=${RIVE_DEPS_CACHE}" powershell.exe
+      ${CMAKE_COMMAND} -E env "RIVE_OUT=${_rive_out_rel_win}" "DEPENDENCIES=${RIVE_DEPS_CACHE}" powershell.exe
       -ExecutionPolicy Bypass -File "${_rive_build_script}" ${_rive_build_args}
-    WORKING_DIRECTORY "${RIVE_RUNTIME_DIR}"
+    WORKING_DIRECTORY "${_rive_build_dir}"
     COMMENT "Building rive-runtime static libraries (premake5 + msbuild)"
     VERBATIM
     USES_TERMINAL
