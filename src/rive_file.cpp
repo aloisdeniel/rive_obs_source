@@ -77,8 +77,8 @@ rive_file_t *rive_file_open(const char *path, char *err, size_t err_size)
 	}
 
 	rive::ImportResult result = rive::ImportResult::malformed;
-	auto file = rive::File::import(rive::Span<const uint8_t>(bytes.data(), bytes.size()),
-				       &shared_no_op_factory(), &result);
+	auto file = rive::File::import(rive::Span<const uint8_t>(bytes.data(), bytes.size()), &shared_no_op_factory(),
+				       &result);
 	if (!file || result != rive::ImportResult::success) {
 		switch (result) {
 		case rive::ImportResult::unsupportedVersion:
@@ -140,8 +140,7 @@ const char *rive_file_artboard_name(const rive_file_t *file, size_t artboard_idx
 	return file->artboards[artboard_idx].name.c_str();
 }
 
-bool rive_file_artboard_size(const rive_file_t *file, size_t artboard_idx, uint32_t *out_w,
-			     uint32_t *out_h)
+bool rive_file_artboard_size(const rive_file_t *file, size_t artboard_idx, uint32_t *out_w, uint32_t *out_h)
 {
 	if (!file || artboard_idx >= file->artboards.size())
 		return false;

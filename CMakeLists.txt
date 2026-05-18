@@ -68,25 +68,15 @@ elseif(WIN32)
 endif()
 
 if(APPLE)
-  target_sources(
-    ${CMAKE_PROJECT_NAME}
-    PRIVATE src/rive_renderer_mac.mm src/rive_image_http_mac.mm
-  )
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_mac.mm src/rive_image_http_mac.mm)
   set_source_files_properties(
     src/rive_renderer_mac.mm
     src/rive_image_http_mac.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-fno-rtti"
   )
 elseif(WIN32)
-  target_sources(
-    ${CMAKE_PROJECT_NAME}
-    PRIVATE src/rive_renderer_win.cpp src/rive_image_http_win.cpp
-  )
-  set_source_files_properties(
-    src/rive_renderer_win.cpp
-    src/rive_image_http_win.cpp
-    PROPERTIES COMPILE_OPTIONS "/GR-"
-  )
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/rive_renderer_win.cpp src/rive_image_http_win.cpp)
+  set_source_files_properties(src/rive_renderer_win.cpp src/rive_image_http_win.cpp PROPERTIES COMPILE_OPTIONS "/GR-")
   # WinHTTP for synchronous HTTP(S) GET in image_http_win.
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winhttp)
 endif()

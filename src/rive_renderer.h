@@ -27,8 +27,7 @@ typedef struct rive_renderer rive_renderer_t;
 
 // Creates an empty renderer sized width x height. No .riv loaded yet — call
 // rive_renderer_set_file() to point it at content.
-rive_renderer_t *rive_renderer_create(uint32_t width, uint32_t height, char *err,
-				      size_t err_size);
+rive_renderer_t *rive_renderer_create(uint32_t width, uint32_t height, char *err, size_t err_size);
 
 void rive_renderer_destroy(rive_renderer_t *r);
 
@@ -50,8 +49,7 @@ void rive_renderer_advance(rive_renderer_t *r, float dt_seconds);
 //   fit_value / alignment_value: strings matching the FIT_VALUES / ALIGN_VALUES
 //     in plugin-main.c (e.g. "contain", "center"). NULL falls back to defaults.
 //   bg_color: RGBA in OBS's encoding (byte 0 = R, byte 3 = A).
-void rive_renderer_render(rive_renderer_t *r, const char *fit_value,
-			  const char *alignment_value, uint32_t bg_color);
+void rive_renderer_render(rive_renderer_t *r, const char *fit_value, const char *alignment_value, uint32_t bg_color);
 
 // Returns the gs_texture_t the source should sample, or NULL when nothing has
 // been rendered yet. The renderer retains ownership.

@@ -54,18 +54,14 @@ extern void *rive_obs_link_probe(void);
 
 // Fit / alignment values are persisted as strings so future renderer code can
 // map them to rive::Fit / rive::Alignment without an int-vs-enum coupling.
-static const char *const FIT_VALUES[] = {"contain",   "cover",      "fill",      "fit-width",
-					 "fit-height", "none",       "scale-down"};
-static const char *const FIT_LABELS[] = {"Contain",   "Cover",      "Fill",      "Fit width",
-					 "Fit height", "None",       "Scale down"};
+static const char *const FIT_VALUES[] = {"contain", "cover", "fill", "fit-width", "fit-height", "none", "scale-down"};
+static const char *const FIT_LABELS[] = {"Contain", "Cover", "Fill", "Fit width", "Fit height", "None", "Scale down"};
 #define FIT_COUNT (sizeof(FIT_VALUES) / sizeof(FIT_VALUES[0]))
 
-static const char *const ALIGN_VALUES[] = {"top-left",   "top-center",   "top-right",
-					   "center-left", "center",       "center-right",
-					   "bottom-left", "bottom-center", "bottom-right"};
-static const char *const ALIGN_LABELS[] = {"Top left",   "Top center",   "Top right",
-					   "Center left", "Center",       "Center right",
-					   "Bottom left", "Bottom center", "Bottom right"};
+static const char *const ALIGN_VALUES[] = {"top-left",     "top-center",  "top-right",     "center-left", "center",
+					   "center-right", "bottom-left", "bottom-center", "bottom-right"};
+static const char *const ALIGN_LABELS[] = {"Top left",     "Top center",  "Top right",     "Center left", "Center",
+					   "Center right", "Bottom left", "Bottom center", "Bottom right"};
 #define ALIGN_COUNT (sizeof(ALIGN_VALUES) / sizeof(ALIGN_VALUES[0]))
 
 struct rive_source {
@@ -108,9 +104,9 @@ struct rive_source {
 	// failure), read by the UI thread (when populating the properties
 	// panel). The mutex is held only for short snapshots.
 	pthread_mutex_t status_mu;
-	char *last_error;     // owned (bstrdup) error string, or NULL
-	bool last_load_ok;    // true if the most recent load succeeded
-	bool ever_loaded;     // true once a file has been successfully loaded
+	char *last_error;  // owned (bstrdup) error string, or NULL
+	bool last_load_ok; // true if the most recent load succeeded
+	bool ever_loaded;  // true once a file has been successfully loaded
 	// Most recently logged error string. Used to suppress repeated
 	// identical errors so we don't spam the OBS log when the watcher
 	// keeps reading a malformed file.
@@ -228,11 +224,9 @@ static char *rive_source_format_status(struct rive_source *ctx)
 	} else if (ok) {
 		n = snprintf(buf, sizeof(buf), "Loaded: %s", ctx->path);
 		if (ctx->artboard && *ctx->artboard)
-			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nArtboard: %s",
-				      ctx->artboard);
+			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nArtboard: %s", ctx->artboard);
 		if (ctx->state_machine && *ctx->state_machine)
-			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nState machine: %s",
-				      ctx->state_machine);
+			n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\nState machine: %s", ctx->state_machine);
 	} else if (ever) {
 		n = snprintf(buf, sizeof(buf), "Pending reload: %s", ctx->path);
 	} else {
@@ -273,8 +267,7 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 		ctx->renderer = rive_renderer_create(ctx->width, ctx->height, err, sizeof(err));
 		obs_leave_graphics();
 		if (!ctx->renderer) {
-			obs_log(LOG_ERROR, "rive: renderer create failed: %s",
-				err[0] ? err : "unknown");
+			obs_log(LOG_ERROR, "rive: renderer create failed: %s", err[0] ? err : "unknown");
 			rive_source_set_status(ctx, false, err[0] ? err : "renderer create failed");
 			return;
 		}
@@ -298,8 +291,7 @@ static void rive_source_sync_renderer(struct rive_source *ctx)
 	char err[256];
 	err[0] = '\0';
 	const bool ok = rive_renderer_set_file(ctx->renderer, ctx->path, ctx->artboard ? ctx->artboard : "",
-					       ctx->state_machine ? ctx->state_machine : "", err,
-					       sizeof(err));
+					       ctx->state_machine ? ctx->state_machine : "", err, sizeof(err));
 	if (!ok) {
 		rive_source_log_error_once(ctx, "rive: set_file failed: %s", err);
 		rive_source_set_status(ctx, false, err[0] ? err : "set_file failed");
@@ -385,8 +377,7 @@ static void rive_source_poll_data_file(struct rive_source *ctx, float dt)
 		if (!ctx->data_logged_error || strcmp(ctx->data_logged_error, msg) != 0) {
 			bfree(ctx->data_logged_error);
 			ctx->data_logged_error = bstrdup(msg);
-			obs_log(LOG_WARNING, "rive: data file is not valid JSON: %s",
-				ctx->data_path);
+			obs_log(LOG_WARNING, "rive: data file is not valid JSON: %s", ctx->data_path);
 		}
 		return;
 	}
@@ -495,8 +486,7 @@ static uint32_t rive_source_get_height(void *data)
 
 // ---- properties ------------------------------------------------------------
 
-static void populate_state_machines(obs_property_t *sm_prop, rive_file_t *file,
-				    const char *artboard_name)
+static void populate_state_machines(obs_property_t *sm_prop, rive_file_t *file, const char *artboard_name)
 {
 	obs_property_list_clear(sm_prop);
 	if (!file)
@@ -532,8 +522,7 @@ static void populate_artboards(obs_property_t *ab_prop, rive_file_t *file)
 	}
 }
 
-static bool on_file_modified(obs_properties_t *props, obs_property_t *property,
-			     obs_data_t *settings)
+static bool on_file_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
 {
 	UNUSED_PARAMETER(property);
 
@@ -547,8 +536,7 @@ static bool on_file_modified(obs_properties_t *props, obs_property_t *property,
 		err[0] = '\0';
 		file = rive_file_open(path, err, sizeof(err));
 		if (!file)
-			obs_log(LOG_WARNING, "rive: failed to load '%s': %s", path,
-				err[0] ? err : "unknown error");
+			obs_log(LOG_WARNING, "rive: failed to load '%s': %s", path, err[0] ? err : "unknown error");
 	}
 
 	populate_artboards(ab_prop, file);
@@ -557,8 +545,7 @@ static bool on_file_modified(obs_properties_t *props, obs_property_t *property,
 	// the first one and reset the SM choice to keep the UI consistent.
 	const char *current_ab = obs_data_get_string(settings, SK_ARTBOARD);
 	if (file && rive_file_find_artboard(file, current_ab) == SIZE_MAX) {
-		const char *first =
-			rive_file_artboard_count(file) > 0 ? rive_file_artboard_name(file, 0) : "";
+		const char *first = rive_file_artboard_count(file) > 0 ? rive_file_artboard_name(file, 0) : "";
 		obs_data_set_string(settings, SK_ARTBOARD, first ? first : "");
 		obs_data_set_string(settings, SK_STATE_MACHINE, "");
 	}
@@ -569,8 +556,7 @@ static bool on_file_modified(obs_properties_t *props, obs_property_t *property,
 	return true;
 }
 
-static bool on_artboard_modified(obs_properties_t *props, obs_property_t *property,
-				 obs_data_t *settings)
+static bool on_artboard_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
 {
 	UNUSED_PARAMETER(property);
 
@@ -587,8 +573,7 @@ static bool on_artboard_modified(obs_properties_t *props, obs_property_t *proper
 	// Clear the SM if it's no longer valid for the new artboard.
 	const char *current_sm = obs_data_get_string(settings, SK_STATE_MACHINE);
 	if (current_sm && *current_sm && file) {
-		size_t ab_idx =
-			rive_file_find_artboard(file, obs_data_get_string(settings, SK_ARTBOARD));
+		size_t ab_idx = rive_file_find_artboard(file, obs_data_get_string(settings, SK_ARTBOARD));
 		if (ab_idx == SIZE_MAX)
 			ab_idx = 0;
 		bool found = false;
@@ -631,36 +616,30 @@ static obs_properties_t *rive_source_get_properties(void *data)
 		char *status = rive_source_format_status(ctx);
 		obs_properties_add_text(props, SK_STATUS, status ? status : "", OBS_TEXT_INFO);
 		bfree(status);
-		obs_properties_add_button(props, SK_REFRESH, obs_module_text("Refresh"),
-					  on_refresh_clicked);
+		obs_properties_add_button(props, SK_REFRESH, obs_module_text("Refresh"), on_refresh_clicked);
 	}
 
-	obs_property_t *p_file =
-		obs_properties_add_path(props, SK_FILE, obs_module_text("File"), OBS_PATH_FILE,
-					"Rive files (*.riv);;All files (*.*)", NULL);
+	obs_property_t *p_file = obs_properties_add_path(props, SK_FILE, obs_module_text("File"), OBS_PATH_FILE,
+							 "Rive files (*.riv);;All files (*.*)", NULL);
 	obs_property_set_modified_callback(p_file, on_file_modified);
 
-	obs_property_t *p_ab = obs_properties_add_list(props, SK_ARTBOARD,
-						       obs_module_text("Artboard"),
+	obs_property_t *p_ab = obs_properties_add_list(props, SK_ARTBOARD, obs_module_text("Artboard"),
 						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_set_modified_callback(p_ab, on_artboard_modified);
 
-	obs_properties_add_list(props, SK_STATE_MACHINE, obs_module_text("StateMachine"),
-				OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_properties_add_list(props, SK_STATE_MACHINE, obs_module_text("StateMachine"), OBS_COMBO_TYPE_LIST,
+				OBS_COMBO_FORMAT_STRING);
 
 	obs_properties_add_int(props, SK_WIDTH, obs_module_text("Width"), 1, 8192, 1);
 	obs_properties_add_int(props, SK_HEIGHT, obs_module_text("Height"), 1, 8192, 1);
 
-	obs_property_t *p_fit = obs_properties_add_list(props, SK_FIT, obs_module_text("Fit"),
-							OBS_COMBO_TYPE_LIST,
+	obs_property_t *p_fit = obs_properties_add_list(props, SK_FIT, obs_module_text("Fit"), OBS_COMBO_TYPE_LIST,
 							OBS_COMBO_FORMAT_STRING);
 	for (size_t i = 0; i < FIT_COUNT; ++i)
 		obs_property_list_add_string(p_fit, FIT_LABELS[i], FIT_VALUES[i]);
 
-	obs_property_t *p_align = obs_properties_add_list(props, SK_ALIGNMENT,
-							  obs_module_text("Alignment"),
-							  OBS_COMBO_TYPE_LIST,
-							  OBS_COMBO_FORMAT_STRING);
+	obs_property_t *p_align = obs_properties_add_list(props, SK_ALIGNMENT, obs_module_text("Alignment"),
+							  OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	for (size_t i = 0; i < ALIGN_COUNT; ++i)
 		obs_property_list_add_string(p_align, ALIGN_LABELS[i], ALIGN_VALUES[i]);
 
@@ -668,8 +647,8 @@ static obs_properties_t *rive_source_get_properties(void *data)
 
 	// Optional JSON file feeding the user-defined view model. Polled once
 	// per second; see rive_custom_data.h for the value-mapping contract.
-	obs_properties_add_path(props, SK_DATA_FILE, obs_module_text("DataFile"),
-				OBS_PATH_FILE, "JSON files (*.json);;All files (*.*)", NULL);
+	obs_properties_add_path(props, SK_DATA_FILE, obs_module_text("DataFile"), OBS_PATH_FILE,
+				"JSON files (*.json);;All files (*.*)", NULL);
 
 	// Pre-populate the dropdowns based on the source's current settings so
 	// the panel shows real choices the first time it opens.
@@ -702,8 +681,7 @@ static void rive_source_video_tick(void *data, float seconds)
 		// one). Done *before* advance so this frame's state machine
 		// can react to the new values.
 		if (ctx->scene_state) {
-			const struct rive_scene_state *state =
-				obs_scene_state_refresh(ctx->scene_state);
+			const struct rive_scene_state *state = obs_scene_state_refresh(ctx->scene_state);
 			rive_renderer_apply_scene_state(ctx->renderer, state);
 		}
 
@@ -745,7 +723,7 @@ static void rive_source_render(void *data, gs_effect_t *effect)
 #ifdef __APPLE__
 			gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT_RECT);
 #else
-			gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+		gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 #endif
 			gs_eparam_t *image = gs_effect_get_param_by_name(def, "image");
 			gs_effect_set_texture(image, tex);

@@ -2,5 +2,25 @@
     "id": "obs-source",
     "type": "CustomDataViewModel",
     "avatar": "https://picsum.photos/300/300",
-    "topic": "What's new in Rive?!"
+    "topic": "What's new in Rive?!",
+    "chat": [
+        {
+            "type": "ChatViewModel",
+            "id": "1",
+            "user": "John",
+            "message": "Hi Rive team! I just wanted to say that I love your product and I'm really excited to see what new features you have in store for us."
+        },
+        {
+            "type": "ChatViewModel",
+            "id": "2",
+            "user": "Rive Team",
+            "message": "Hi John! Thank you so much for your kind words. We're thrilled to hear that you love Rive and we're working hard to bring you some amazing new features. Stay tuned for updates!"
+        },
+        {
+            "type": "ChatViewModel",
+            "id": "3",
+            "user": "John",
+            "message": "That's great to hear! I'm really looking forward to seeing what you have in store. Keep up the great work!"
+        }
+    ]
 }

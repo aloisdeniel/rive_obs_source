@@ -104,8 +104,7 @@ public:
 	// images may be null — in that case string values targeting image
 	// properties are silently skipped.
 	// Returns nullptr only if file is null.
-	static std::unique_ptr<CustomDataBinding> tryCreate(rive::File *file,
-							    rive::Artboard *artboard,
+	static std::unique_ptr<CustomDataBinding> tryCreate(rive::File *file, rive::Artboard *artboard,
 							    rive::StateMachineInstance *sm,
 							    rive::ViewModelInstanceRuntime *scene_root,
 							    ImageCache *images);
@@ -127,21 +126,17 @@ private:
 		// nested-VM property name → (last-seen "id", current instance
 		// pointer). Pointer is non-owning — Rive keeps the rcp via
 		// the parent VM.
-		std::unordered_map<std::string, std::pair<std::string, rive::ViewModelInstanceRuntime *>>
-			nested;
+		std::unordered_map<std::string, std::pair<std::string, rive::ViewModelInstanceRuntime *>> nested;
 		// list property name → (id → rcp of currently-listed item).
 		// We hold rcps so items survive the removeAllInstances() call
 		// during list reconciliation.
 		std::unordered_map<std::string,
-				   std::unordered_map<std::string,
-						      rive::rcp<rive::ViewModelInstanceRuntime>>>
+				   std::unordered_map<std::string, rive::rcp<rive::ViewModelInstanceRuntime>>>
 			list_items;
 	};
 
-	CustomDataBinding(rive::File *file, rive::Artboard *artboard,
-			  rive::StateMachineInstance *sm,
-			  rive::ViewModelInstanceRuntime *scene_root,
-			  ImageCache *images);
+	CustomDataBinding(rive::File *file, rive::Artboard *artboard, rive::StateMachineInstance *sm,
+			  rive::ViewModelInstanceRuntime *scene_root, ImageCache *images);
 
 	// First-apply-only when no SceneViewModel: pick a VM by JSON "type"
 	// (or the artboard default as a fallback), instantiate it, bind it
@@ -157,11 +152,11 @@ private:
 	void forgetState(rive::ViewModelInstanceRuntime *vm);
 
 	rive::File *m_file;
-	rive::Artboard *m_artboard;          // for default-VM fallback during resolveRoot
-	rive::StateMachineInstance *m_sm;    // bound during resolveRoot, and re-bound on root id change
-	ImageCache *m_images;                // shared with the renderer; null when image loading is disabled
-	bool m_rootResolved;                 // resolveRoot ran (succeeded or gave up)
-	bool m_routingResolved = false;      // first-apply routing decision computed
+	rive::Artboard *m_artboard;       // for default-VM fallback during resolveRoot
+	rive::StateMachineInstance *m_sm; // bound during resolveRoot, and re-bound on root id change
+	ImageCache *m_images;             // shared with the renderer; null when image loading is disabled
+	bool m_rootResolved;              // resolveRoot ran (succeeded or gave up)
+	bool m_routingResolved = false;   // first-apply routing decision computed
 
 	// Last-seen id of the root, or "" if untracked. A change here triggers
 	// root replacement (only meaningful when we own the root).

@@ -39,18 +39,19 @@ endif()
 
 # Library files produced by the premake build, in link order
 # (dependents first). Ordering matters for ld on Linux/macOS.
-set(_rive_lib_names
-    rive_pls_renderer
-    rive
-    rive_decoders
-    rive_harfbuzz
-    rive_sheenbidi
-    rive_yoga
-    libpng
-    libjpeg
-    libwebp
-    zlib
-    luau_vm
+set(
+  _rive_lib_names
+  rive_pls_renderer
+  rive
+  rive_decoders
+  rive_harfbuzz
+  rive_sheenbidi
+  rive_yoga
+  libpng
+  libjpeg
+  libwebp
+  zlib
+  luau_vm
 )
 
 set(_rive_lib_files "")
@@ -60,12 +61,13 @@ endforeach()
 
 # Args we pass to build_rive.sh. The `release` token selects --config=release;
 # the rest are forwarded to premake5 verbatim.
-set(_rive_build_args
-    "release"
-    "--file=${CMAKE_SOURCE_DIR}/cmake/rive/rive_obs_workspace.lua"
-    "--with_rive_text"
-    "--with_rive_layout"
-    "--with-pic"
+set(
+  _rive_build_args
+  "release"
+  "--file=${CMAKE_SOURCE_DIR}/cmake/rive/rive_obs_workspace.lua"
+  "--with_rive_text"
+  "--with_rive_layout"
+  "--with-pic"
 )
 
 if(APPLE)
@@ -95,8 +97,7 @@ file(RELATIVE_PATH _rive_out_rel "${RIVE_RUNTIME_DIR}" "${RIVE_OUT_DIR}")
 # to clear any stale empty output dir.
 set(_rive_clean_script "${RIVE_BUILD_DIR}/clean_stale_rive_out.cmake")
 file(
-  WRITE
-  "${_rive_clean_script}"
+  WRITE "${_rive_clean_script}"
   "if(EXISTS \"\${RIVE_OUT}\" AND NOT EXISTS \"\${RIVE_OUT}/.rive_premake_args\")
   message(STATUS \"Removing stale rive output dir: \${RIVE_OUT}\")
   file(REMOVE_RECURSE \"\${RIVE_OUT}\")
@@ -110,17 +111,8 @@ if(WIN32)
     OUTPUT ${_rive_lib_files}
     COMMAND ${CMAKE_COMMAND} -DRIVE_OUT=${RIVE_OUT_DIR} -P "${_rive_clean_script}"
     COMMAND
-      ${CMAKE_COMMAND}
-      -E
-      env
-      "RIVE_OUT=${_rive_out_rel}"
-      "DEPENDENCIES=${RIVE_DEPS_CACHE}"
-      powershell.exe
-      -ExecutionPolicy
-      Bypass
-      -File
-      "${_rive_build_script}"
-      ${_rive_build_args}
+      ${CMAKE_COMMAND} -E env "RIVE_OUT=${_rive_out_rel}" "DEPENDENCIES=${RIVE_DEPS_CACHE}" powershell.exe
+      -ExecutionPolicy Bypass -File "${_rive_build_script}" ${_rive_build_args}
     WORKING_DIRECTORY "${RIVE_RUNTIME_DIR}"
     COMMENT "Building rive-runtime static libraries (premake5 + msbuild)"
     VERBATIM
@@ -132,13 +124,7 @@ else()
     OUTPUT ${_rive_lib_files}
     COMMAND ${CMAKE_COMMAND} -DRIVE_OUT=${RIVE_OUT_DIR} -P "${_rive_clean_script}"
     COMMAND
-      ${CMAKE_COMMAND}
-      -E
-      env
-      "RIVE_OUT=${_rive_out_rel}"
-      "DEPENDENCIES=${RIVE_DEPS_CACHE}"
-      bash
-      "${_rive_build_script}"
+      ${CMAKE_COMMAND} -E env "RIVE_OUT=${_rive_out_rel}" "DEPENDENCIES=${RIVE_DEPS_CACHE}" bash "${_rive_build_script}"
       ${_rive_build_args}
     WORKING_DIRECTORY "${RIVE_RUNTIME_DIR}"
     COMMENT "Building rive-runtime static libraries (premake5 + make)"
@@ -166,10 +152,7 @@ add_library(rive::runtime INTERFACE IMPORTED GLOBAL)
 
 target_include_directories(
   rive::runtime
-  INTERFACE
-    "${RIVE_RUNTIME_DIR}/include"
-    "${RIVE_RUNTIME_DIR}/renderer/include"
-    "${RIVE_RUNTIME_DIR}/decoders/include"
+  INTERFACE "${RIVE_RUNTIME_DIR}/include" "${RIVE_RUNTIME_DIR}/renderer/include" "${RIVE_RUNTIME_DIR}/decoders/include"
 )
 
 # Static-lib link order matters on ld (dependents first). Renderer pulls in
@@ -207,8 +190,5 @@ if(APPLE)
       "-framework ImageIO"
   )
 elseif(WIN32)
-  target_link_libraries(
-    rive::runtime
-    INTERFACE d3d11.lib dxgi.lib dxguid.lib d3dcompiler.lib
-  )
+  target_link_libraries(rive::runtime INTERFACE d3d11.lib dxgi.lib dxguid.lib d3dcompiler.lib)
 endif()

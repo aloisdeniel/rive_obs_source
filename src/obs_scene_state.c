@@ -148,8 +148,7 @@ static void ws_push_audio(struct collector_workspace *w, const struct audio_acc 
 // four corners of the unit quad through its box_transform and reducing to
 // min/max. This handles rotated/scaled items correctly; for non-rotated items
 // it collapses to (pos, pos + scaled-size) as expected.
-static void item_aabb(obs_sceneitem_t *item, float *out_x, float *out_y, float *out_w,
-		      float *out_h)
+static void item_aabb(obs_sceneitem_t *item, float *out_x, float *out_y, float *out_w, float *out_h)
 {
 	struct matrix4 m;
 	obs_sceneitem_get_box_transform(item, &m);

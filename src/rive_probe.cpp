@@ -11,11 +11,8 @@
 // dead-code elimination. Returns void* to keep this exportable to C.
 extern "C" void *rive_obs_link_probe(void)
 {
-	using ImportFn = rive::rcp<rive::File> (*)(rive::Span<const uint8_t>,
-	                                           rive::Factory *,
-	                                           rive::ImportResult *,
-	                                           rive::rcp<rive::FileAssetLoader>,
-	                                           rive::ScriptingVM *);
+	using ImportFn = rive::rcp<rive::File> (*)(rive::Span<const uint8_t>, rive::Factory *, rive::ImportResult *,
+						   rive::rcp<rive::FileAssetLoader>, rive::ScriptingVM *);
 	ImportFn fn = &rive::File::import;
 	return reinterpret_cast<void *>(fn);
 }

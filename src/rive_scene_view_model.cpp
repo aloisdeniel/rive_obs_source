@@ -35,8 +35,7 @@ namespace {
 
 // Convenience helpers. Each tolerates a missing property — the .riv author may
 // have only declared a subset of the fields documented in the header.
-void set_string_if_present(rive::ViewModelInstanceRuntime *vm, const char *name,
-			   const char *value)
+void set_string_if_present(rive::ViewModelInstanceRuntime *vm, const char *name, const char *value)
 {
 	if (!vm)
 		return;
@@ -79,8 +78,7 @@ void set_boolean_if_present(rive::ViewModelInstanceRuntime *vm, const char *name
 //      not exist in the file; the caller treats that as "give up").
 // The "inspecting an existing item" branch is what lets the author choose any
 // inner VM name they like — we just need *one* sample to learn it.
-std::string detect_list_item_vm_name(rive::ViewModelInstanceListRuntime *list,
-				     const char *fallback)
+std::string detect_list_item_vm_name(rive::ViewModelInstanceListRuntime *list, const char *fallback)
 {
 	if (list && list->size() > 0) {
 		auto first = list->instanceAt(0);
@@ -92,8 +90,8 @@ std::string detect_list_item_vm_name(rive::ViewModelInstanceListRuntime *list,
 
 } // namespace
 
-std::unique_ptr<SceneViewModelBinding>
-SceneViewModelBinding::tryCreate(rive::File *file, rive::StateMachineInstance *sm)
+std::unique_ptr<SceneViewModelBinding> SceneViewModelBinding::tryCreate(rive::File *file,
+									rive::StateMachineInstance *sm)
 {
 	if (!file)
 		return nullptr;
@@ -122,17 +120,16 @@ SceneViewModelBinding::tryCreate(rive::File *file, rive::StateMachineInstance *s
 	return std::unique_ptr<SceneViewModelBinding>(new SceneViewModelBinding(file, std::move(root)));
 }
 
-SceneViewModelBinding::SceneViewModelBinding(rive::File *file,
-					     rive::rcp<rive::ViewModelInstanceRuntime> root)
-	: m_file(file), m_root(std::move(root))
+SceneViewModelBinding::SceneViewModelBinding(rive::File *file, rive::rcp<rive::ViewModelInstanceRuntime> root)
+	: m_file(file),
+	  m_root(std::move(root))
 {
 }
 
 SceneViewModelBinding::~SceneViewModelBinding() = default;
 
 rive::ViewModelInstanceListRuntime *
-SceneViewModelBinding::resizeList(const char *property_name, const std::string &item_vm_name,
-				  size_t desired_count)
+SceneViewModelBinding::resizeList(const char *property_name, const std::string &item_vm_name, size_t desired_count)
 {
 	if (!m_root)
 		return nullptr;
@@ -192,10 +189,8 @@ void SceneViewModelBinding::apply(const rive_scene_state &state)
 	set_boolean_if_present(m_root.get(), "streaming", state.streaming);
 	set_boolean_if_present(m_root.get(), "recording", state.recording);
 	set_boolean_if_present(m_root.get(), "recordingPaused", state.recording_paused);
-	set_number_if_present(m_root.get(), "sourceCount",
-			      static_cast<float>(state.source_count));
-	set_number_if_present(m_root.get(), "audioCount",
-			      static_cast<float>(state.audio_count));
+	set_number_if_present(m_root.get(), "sourceCount", static_cast<float>(state.source_count));
+	set_number_if_present(m_root.get(), "audioCount", static_cast<float>(state.audio_count));
 
 	// Sources list -----------------------------------------------------
 	{
@@ -203,8 +198,7 @@ void SceneViewModelBinding::apply(const rive_scene_state &state)
 		// already has in the list. If empty, try a conventional name.
 		auto *list_for_detect = m_root->propertyList("sources");
 		if (m_sourcesItemVmName.empty()) {
-			m_sourcesItemVmName =
-				detect_list_item_vm_name(list_for_detect, "SourceViewModel");
+			m_sourcesItemVmName = detect_list_item_vm_name(list_for_detect, "SourceViewModel");
 		}
 
 		auto *list = resizeList("sources", m_sourcesItemVmName, state.source_count);
@@ -229,8 +223,7 @@ void SceneViewModelBinding::apply(const rive_scene_state &state)
 	{
 		auto *list_for_detect = m_root->propertyList("audioSources");
 		if (m_audioItemVmName.empty()) {
-			m_audioItemVmName = detect_list_item_vm_name(list_for_detect,
-								     "AudioSourceViewModel");
+			m_audioItemVmName = detect_list_item_vm_name(list_for_detect, "AudioSourceViewModel");
 		}
 
 		auto *list = resizeList("audioSources", m_audioItemVmName, state.audio_count);

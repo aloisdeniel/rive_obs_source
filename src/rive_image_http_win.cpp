@@ -67,9 +67,8 @@ bool image_http_fetch(const std::string &url, std::vector<uint8_t> &out, std::st
 	if (comps.dwExtraInfoLength)
 		path.append(comps.lpszExtraInfo, comps.dwExtraInfoLength);
 
-	HINTERNET session = WinHttpOpen(L"rive-obs-source/1.0",
-					WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-					WINHTTP_NO_PROXY_BYPASS, 0);
+	HINTERNET session = WinHttpOpen(L"rive-obs-source/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+					WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 	if (!session) {
 		err = "WinHttpOpen failed";
 		return false;
@@ -87,16 +86,15 @@ bool image_http_fetch(const std::string &url, std::vector<uint8_t> &out, std::st
 	WinHttpGuard g_conn{conn};
 
 	const DWORD flags = (comps.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-	HINTERNET req = WinHttpOpenRequest(conn, L"GET", path.c_str(), nullptr,
-					   WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+	HINTERNET req = WinHttpOpenRequest(conn, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+					   WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
 	if (!req) {
 		err = "WinHttpOpenRequest failed";
 		return false;
 	}
 	WinHttpGuard g_req{req};
 
-	if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0,
-				0, 0)) {
+	if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
 		err = "WinHttpSendRequest failed";
 		return false;
 	}
@@ -107,10 +105,8 @@ bool image_http_fetch(const std::string &url, std::vector<uint8_t> &out, std::st
 
 	DWORD status = 0;
 	DWORD status_size = sizeof(status);
-	WinHttpQueryHeaders(req,
-			    WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-			    WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
-			    WINHTTP_NO_HEADER_INDEX);
+	WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+			    &status, &status_size, WINHTTP_NO_HEADER_INDEX);
 	if (status < 200 || status >= 300) {
 		char buf[64];
 		std::snprintf(buf, sizeof(buf), "HTTP %lu", (unsigned long)status);

@@ -108,8 +108,7 @@ public:
 	// created without binding to a state machine (useful for files that draw
 	// a single artboard with no SM). The state machine can be re-supplied
 	// later via rebind().
-	static std::unique_ptr<SceneViewModelBinding> tryCreate(rive::File *file,
-								rive::StateMachineInstance *sm);
+	static std::unique_ptr<SceneViewModelBinding> tryCreate(rive::File *file, rive::StateMachineInstance *sm);
 
 	~SceneViewModelBinding();
 
@@ -123,14 +122,12 @@ public:
 	rive::ViewModelInstanceRuntime *root() const { return m_root.get(); }
 
 private:
-	SceneViewModelBinding(rive::File *file,
-			      rive::rcp<rive::ViewModelInstanceRuntime> root);
+	SceneViewModelBinding(rive::File *file, rive::rcp<rive::ViewModelInstanceRuntime> root);
 
 	// Resize a list of inner view-model instances to match desired_count by
 	// adding/removing items. Returns the list, or nullptr if the list
 	// property is missing.
-	rive::ViewModelInstanceListRuntime *resizeList(const char *property_name,
-						       const std::string &item_vm_name,
+	rive::ViewModelInstanceListRuntime *resizeList(const char *property_name, const std::string &item_vm_name,
 						       size_t desired_count);
 
 	rive::File *m_file;
