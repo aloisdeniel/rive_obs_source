@@ -77,7 +77,11 @@ elseif(WIN32)
   # No --with-pic on Windows: rive's premake config maps it to -fPIC, which
   # clang-cl rejects (-Werror,-Wunknown-argument). PE/COFF is position-
   # independent by design, so the flag is unnecessary here anyway.
-  list(APPEND _rive_build_args "--arch=x64")
+  #
+  # --windows_runtime=dynamic_release forces /MD. rive's default Windows
+  # config uses /MT (static CRT) to match Skia, but OBS plugins link against
+  # the dynamic CRT; mixing them yields LNK2038 RuntimeLibrary mismatches.
+  list(APPEND _rive_build_args "--arch=x64" "--windows_runtime=dynamic_release")
 else()
   # Linux: static libs are linked into a shared .so, so they must be PIC.
   list(APPEND _rive_build_args "--with-pic")
