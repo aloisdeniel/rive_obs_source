@@ -61,12 +61,20 @@ endforeach()
 
 # Args we pass to build_rive.sh. The `release` token selects --config=release;
 # the rest are forwarded to premake5 verbatim.
+#
+# --with_rive_scripting builds the real Luau VM (instead of the dummy luau_vm
+# stub) and compiles libhydrogen into librive. It is required for .riv files
+# that use Lua-scripted data converters: without it, ScriptAsset objects get no
+# importer during File::import, and their in-band content leaks onto the
+# preceding asset importer — corrupting the data-binding manifest and breaking
+# every name-based data bind.
 set(
   _rive_build_args
   "release"
   "--file=${CMAKE_SOURCE_DIR}/cmake/rive/rive_obs_workspace.lua"
   "--with_rive_text"
   "--with_rive_layout"
+  "--with_rive_scripting"
 )
 
 if(APPLE)
@@ -171,6 +179,14 @@ target_include_directories(
   rive::runtime
   INTERFACE "${RIVE_RUNTIME_DIR}/include" "${RIVE_RUNTIME_DIR}/renderer/include" "${RIVE_RUNTIME_DIR}/decoders/include"
 )
+
+# These feature flags change the ABI of rive's *public* headers: e.g. enabling
+# WITH_RIVE_SCRIPTING adds a `m_scriptingVM` member to File and members/virtuals
+# to Artboard. They MUST match the flags the static libs were built with (see
+# _rive_build_args above) — otherwise translation units that include rive
+# headers disagree with the libraries about class layout, which corrupts memory
+# and crashes. Keep this list in sync with the --with_rive_* build args.
+target_compile_definitions(rive::runtime INTERFACE WITH_RIVE_TEXT WITH_RIVE_LAYOUT WITH_RIVE_SCRIPTING)
 
 # Static-lib link order matters on ld (dependents first). Renderer pulls in
 # rive core; rive core pulls in harfbuzz/sheenbidi/yoga.

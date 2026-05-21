@@ -3,7 +3,8 @@
 -- Pulls in only the rive-runtime static libraries we link against:
 --   rive (core), rive_pls_renderer, rive_decoders, plus their transitive deps
 --   (rive_harfbuzz, rive_sheenbidi, rive_yoga, miniaudio, libpng, libjpeg,
---    libwebp, zlib, luau_vm (dummy)).
+--    libwebp, zlib, luau_vm — the real Luau VM, since the build enables
+--    --with_rive_scripting).
 --
 -- Skips path_fiddle / webgpu_player demo apps and glfw3.
 --
@@ -24,7 +25,7 @@ if not os.isfile(rive_root .. '/premake5_v2.lua') then
     rive_root = path.getabsolute(rive_root .. '/..')
 end
 
--- rive core + transitive deps (harfbuzz, sheenbidi, miniaudio, yoga, luau_vm stub).
+-- rive core + transitive deps (harfbuzz, sheenbidi, miniaudio, yoga, luau_vm).
 -- premake5_v2.lua does `path.getabsolute('dependencies/')`, so CWD = rive root.
 os.chdir(rive_root)
 dofile(rive_root .. '/premake5_v2.lua')
